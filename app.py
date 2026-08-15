@@ -44,7 +44,6 @@ def get_month_games(archive_url):
 def parse_game(game_dict):
     pgn_text = game_dict.get("pgn")
     if not pgn_text:
-        # Chess.com game objects normally contain pgn.
         return None
     game = chess.pgn.read_game(io.StringIO(pgn_text))
     if game is None:
@@ -79,7 +78,6 @@ def eco_name(game):
     return " — ".join([x for x in [eco, opening, variation] if x])
 
 def parse_clock_seconds(clock):
-    # Chess.com PGN clock format: [%clk H:MM:SS]
     if not clock:
         return None
     try:
@@ -93,6 +91,18 @@ def parse_clock_seconds(clock):
     except Exception:
         pass
     return None
+
+def est_une_partie_longue(game_dict):
+    """
+    Filtre les parties pour ne garder que les cadences de réflexion.
+    On considère une cadence longue si le temps initial est >= 600s (10 minutes).
+    """
+    time_control = game_dict.get("time_control", "")
+    try:
+        seconds = int(time_control.split('+')[0])
+        return seconds >= 600
+    except (ValueError, AttributeError, IndexError):
+        return False
 
 # -----------------------------
 # Stockfish analysis
@@ -124,7 +134,6 @@ def score_cp(score, pov):
     return s.score(mate_score=100000)
 
 def classify_drop(drop):
-    # centipawn loss from the user's point of view
     if drop >= 250:
         return "Gaffe"
     if drop >= 100:
@@ -138,12 +147,11 @@ def analyze_game(game, username, engine, depth=16, max_plies=160):
         return None
 
     board = game.board()
-    user_color = user_color_fn = user_color(game, username)
-    if user_color is None:
+    u_color = user_color(game, username)
+    if u_color is None:
         return None
 
     records = []
-    prev_user_eval = None
 
     for ply, move in enumerate(game.mainline_moves()):
         if ply >= max_plies:
@@ -157,7 +165,7 @@ def analyze_game(game, username, engine, depth=16, max_plies=160):
             multipv=1,
         )
         best = info_before["pv"][0] if info_before.get("pv") else None
-        eval_before = score_cp(info_before["score"], user_color)
+        eval_before = score_cp(info_before["score"], u_color)
 
         san = board.san(move)
         board.push(move)
@@ -167,10 +175,9 @@ def analyze_game(game, username, engine, depth=16, max_plies=160):
             chess.engine.Limit(depth=depth),
             multipv=1,
         )
-        eval_after = score_cp(info_after["score"], user_color)
+        eval_after = score_cp(info_after["score"], u_color)
 
-        # Only penalize moves made by the user.
-        if mover == user_color:
+        if mover == u_color:
             drop = max(0, eval_before - eval_after)
             category = classify_drop(drop)
             records.append({
@@ -189,16 +196,6 @@ def analyze_game(game, username, engine, depth=16, max_plies=160):
 # -----------------------------
 # Coach layer
 # -----------------------------
-
-THEMES = {
-    "Gaffes": "Vérifier systématiquement les échecs, captures et menaces adverses avant de jouer.",
-    "Tactique": "Travailler les motifs tactiques courts et le calcul des variantes forcées.",
-    "Précipitation": "Identifier les positions critiques et prendre quelques secondes supplémentaires avant de décider.",
-    "Stratégie": "Chercher le plan adverse, les faiblesses et les ruptures de pions avant de choisir un plan.",
-    "Finales": "Renforcer les finales de pions, finales de tours et technique de conversion.",
-    "Ouvertures": "Consolider les principes et comprendre les plans plutôt que mémoriser trop de variantes.",
-    "Gestion du temps": "Apprendre à répartir la réflexion et à conserver une réserve pour les positions critiques.",
-}
 
 def build_coach_summary(stats):
     if not stats:
@@ -295,11 +292,9 @@ if "games" not in st.session_state:
             for url in reversed(selected_archives):
                 raw_games.extend(get_month_games(url))
             
-            # --- MODIFICATION ICI : Filtrage avant le parsing ---
             filtered_raw_games = [g for g in raw_games if est_une_partie_longue(g)]
             
             parsed = []
-            # On utilise les parties filtrées
             for gd in filtered_raw_games[:max_games]:
                 g = parse_game(gd)
                 if g:
@@ -312,7 +307,6 @@ if "games" not in st.session_state:
             st.stop()
 
 games = st.session_state["games"]
-
 engine = find_engine(engine_path)
 
 if engine is None:
@@ -471,6 +465,5 @@ with tabs[4]:
 
 st.divider()
 st.caption(
-    "Prototype V1 — Stockfish fournit l'évaluation objective ; la couche Coach fournit l'interprétation pédagogique. "
-    "Les catégories et notes seront affinées dans les prochaines versions."
+    "Prototype V1 — Stockfish fournit l'évaluation objective ; la couche Coach fournit l'interprétation pédagogique."
 )
