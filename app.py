@@ -481,26 +481,87 @@ with tabs[3]:
             "- **4. Gestion du temps :** réserver la réflexion longue aux positions réellement critiques."
         )
 
-# Training
+# Training & Resources
 with tabs[4]:
-    st.subheader("🎯 Programme d'entraînement")
-    st.write("Le programme est volontairement simple dans cette V1 ; il sera personnalisé automatiquement lorsque davantage de parties auront été analysées.")
+    st.subheader("🎯 Entraînement & Ressources Pédagogiques")
 
-    st.markdown("### Cette semaine")
-    st.markdown(
-        "1. **10 min/jour — tactique** : motifs en 2–3 coups.\n"
-        "2. **2 parties en 10+5** : objectif = ne jamais jouer automatiquement dans une position tactique.\n"
-        "3. **15 min après chaque partie** : retrouver sans moteur le premier moment où le plan a changé.\n"
-        "4. **1 finale** : travailler une finale de pions ou de tours."
-    )
+    # ------------------------------------
+    # SECTION 1 : EXERCICES DYNAMIQUES
+    # ------------------------------------
+    st.markdown("### 🧩 Tes Puzzles Personnalisés (issus de tes parties)")
 
-    st.markdown("### 🧑‍🏫 Règle du coach")
-    st.info(
-        "Je préfère que tu comprennes pourquoi tu as perdu une position plutôt que de mémoriser "
-        "le coup que Stockfish aurait joué."
-    )
+    analyses = st.session_state.get("analyses_map", {})
+    # Extraire uniquement les positions où il y a eu une Gaffe ou une Erreur
+    puzzles = []
+    for idx, recs in analyses.items():
+        if recs:
+            for r in recs:
+                if r["category"] in ["Gaffe", "Erreur"] and r.get("best"):
+                    puzzles.append((idx, r))
 
-st.divider()
-st.caption(
-    "Prototype V1 — Stockfish fournit l'évaluation objective ; la couche Coach fournit l'interprétation pédagogique."
-)
+    if not puzzles:
+        st.info(
+            "Analyse quelques parties dans l'onglet 'Analyse' pour générer automatiquement tes exercices personnalisés à partir de tes gaffes !"
+        )
+    else:
+        st.write(f"**{len(puzzles)} moment(s) critique(s)** détecté(s) dans tes analyses :")
+        
+        # Choisir un puzzle à réviser
+        selected_puzzle_idx = st.selectbox(
+            "Choisis un moment à rejouer :",
+            range(len(puzzles)),
+            format_func=lambda i: f"Partie {puzzles[i][0]} — Coup {puzzles[i][1]['move_no']} ({puzzles[i][1]['category']} : -{puzzles[i][1]['drop']/100:.2f} pions)"
+        )
+
+        p_idx, puzzle_data = puzzles[selected_puzzle_idx]
+
+        st.markdown(f"**Situation (Coup {puzzle_data['move_no']}) :**")
+        st.write(f"Tu as joué : **{puzzle_data['san']}** (Évaluation : {puzzle_data['eval_after']})")
+
+        with st.expander("💡 Révéler la solution de Stockfish", expanded=False):
+            st.success(f"Le meilleur coup recommandé était : **{puzzle_data['best']}**")
+            st.write(f"Évaluation possible : **{puzzle_data['eval_before']}**")
+            st.info("🎯 **Exercice mental :** Visualise l'échiquier et cherche pourquoi ce coup était supérieur.")
+
+    st.divider()
+
+    # ------------------------------------
+    # SECTION 2 : RESSOURCES PÉDAGOGIQUES
+    # ------------------------------------
+    st.markdown("### 📚 Bibliothèque & Liens Pédagogiques")
+
+    cat_tactique, cat_ouvertures, cat_finales, cat_outils = st.tabs([
+        "🧩 Tactique & Calcul", 
+        "📖 Ouvertures", 
+        "👑 Finales", 
+        "🛠️ Outils & Analyse"
+    ])
+
+    with cat_tactique:
+        st.markdown("""
+        **Entraînement quotidien au calcul :**
+        * 🧩 [Lichess Puzzles](https://lichess.org/training) — Exercices gratuits illimités classés par niveau.
+        * ⚔️ [Lichess Puzzle Racer](https://lichess.org/racer) — Course de vitesse tactique pour travailler les réflexes.
+        * 🎯 [Chess.com Puzzles](https://www.chess.com/puzzles) — Puzzles quotidiens et suivi de niveau.
+        """)
+
+    with cat_ouvertures:
+        st.markdown("""
+        **Compréhension et répertoire :**
+        * 📚 [Lichess Opening Explorer](https://lichess.org/analysis#explorer) — Base de données de master games et statistiques d'ouvertures.
+        * 🎥 [Chessable](https://www.chessable.com) — Apprentissage des lignes d'ouvertures par répétition espacée.
+        """)
+
+    with cat_finales:
+        st.markdown("""
+        **Maîtrise des fin de parties :**
+        * 👑 [Lichess Practice - Finales](https://lichess.org/practice) — Modules interactifs sur les finales fondamentales (pions, tours, pièces mineures).
+        * 🧮 [Syzygy Endgame Tablebases](https://syzygy-tables.info) — Base de données résolue jusqu'à 7 pièces.
+        """)
+
+    with cat_outils:
+        st.markdown("""
+        **Logiciels et outils de travail :**
+        * 🔍 [Lichess Board Editor & Analysis](https://lichess.org/analysis) — Échiquier d'analyse gratuit avec Stockfish complet.
+        * 📦 [ChessBase India / YouTube](https://www.youtube.com/@ChessBaseIndiachannel) — Analyses pédagogiques et grands maîtres.
+        """)
