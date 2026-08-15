@@ -394,20 +394,21 @@ if not username:
 
 # Load data
 if "games" not in st.session_state:
-    with st.spinner("Récupération de tes parties..."):
+    with st.spinner("Récupération de tes parties (sans le blitz)..."):
         try:
             archives = get_archives(username)
-            st.write(f"Archives trouvées : {archives}") # <--- AJOUTE ÇA
-            
             selected_archives = archives[-months:]
-            st.write(f"Archives sélectionnées : {selected_archives}") # <--- AJOUTE ÇA
             
             raw_games = []
+            # On parcourt les mois du plus récent au plus ancien (Août -> Juillet -> Juin)
             for url in reversed(selected_archives):
-                raw_games.extend(get_month_games(url))
+                month_games = get_month_games(url)
+                # On inverse chaque mois pour avoir les jours de fin de mois en premier
+                month_games.reverse()
+                raw_games.extend(month_games)
             
             filtered_raw_games = [g for g in raw_games if est_une_partie_longue(g)]
-            filtered_raw_games.reverse()
+            
             parsed = []
             for gd in filtered_raw_games[:max_games]:
                 g = parse_game(gd)
