@@ -151,15 +151,24 @@ def calculer_note_partie(recs):
     total_drop = sum(r['drop'] for r in recs)
     return round(max(0, 10 - (total_drop / 300)), 1)
     
-def analyze_game(game, username, engine, depth=16, max_plies=160):
+def analyze_game(game, username, engine, depth=12, max_plies=160):
     if engine is None:
-        return None
+        return []
+
+    # Vérification insensible à la casse de la couleur
+    white = game.headers.get("White", "").strip().lower()
+    black = game.headers.get("Black", "").strip().lower()
+    user = username.strip().lower()
+
+    if user in white:
+        u_color = chess.WHITE
+    elif user in black:
+        u_color = chess.BLACK
+    else:
+        # Par défaut, si non trouvé, on analyse les Blancs
+        u_color = chess.WHITE
 
     board = game.board()
-    u_color = user_color(game, username)
-    if u_color is None:
-        return None
-
     records = []
 
     for ply, move in enumerate(game.mainline_moves()):
@@ -168,35 +177,37 @@ def analyze_game(game, username, engine, depth=16, max_plies=160):
 
         mover = board.turn
         before = board.copy()
-        
+        san = board.san(move)
+
+        # Calcul coup avant
         try:
-            info_before = engine.analyse(before, chess.engine.Limit(depth=depth), multipv=1)
-            pv_before = info_before.get("pv")
-            best = pv_before[0] if pv_before else None
+            info_before = engine.analyse(before, chess.engine.Limit(depth=depth))
+            pv_before = info_before.get("pv", [])
+            best_move = pv_before[0] if pv_before else None
             eval_before = score_cp(info_before["score"], u_color)
         except Exception:
-            board.push(move)
-            continue
+            best_move = None
+            eval_before = 0
 
-        san = board.san(move)
         board.push(move)
 
+        # Calcul coup après
         try:
-            info_after = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=1)
+            info_after = engine.analyse(board, chess.engine.Limit(depth=depth))
             eval_after = score_cp(info_after["score"], u_color)
         except Exception:
             eval_after = eval_before
 
+        # Enregistrement des coups du joueur
         if mover == u_color:
             drop = max(0, eval_before - eval_after)
-            category = classify_drop(drop)
             records.append({
                 "ply": ply + 1,
                 "move_no": ply // 2 + 1,
                 "san": san,
                 "drop": round(drop, 1),
-                "category": category,
-                "best": before.san(best) if best else "",
+                "category": classify_drop(drop),
+                "best": before.san(best_move) if best_move else "",
                 "eval_before": round(eval_before / 100, 2),
                 "eval_after": round(eval_after / 100, 2),
             })
@@ -387,7 +398,7 @@ with tabs[2]:
 
         if st.button("🧠 Analyser avec Stockfish", type="primary"):
             if engine is None:
-                st.error("⚠️ Stockfish n'est pas disponible sur le serveur Cloud. Ajoute un fichier 'packages.txt' avec 'stockfish' sur ton dépôt GitHub.")
+                st.error("⚠️ Stockfish n'est pas disponible sur le serveur.")
             else:
                 with st.spinner("Analyse approfondie en cours…"):
                     res = analyze_game(games[selected], username, engine, depth=depth)
@@ -395,24 +406,29 @@ with tabs[2]:
                         st.session_state["analyses_map"] = {}
                     st.session_state["analyses_map"][selected] = res
 
-        # Récupération de l'analyse
         analyses_map = st.session_state.get("analyses_map", {})
         recs = analyses_map.get(selected)
 
         if recs is not None:
-            st.markdown("### 📊 Fiche de performance")
-            note = calculer_note_partie(recs)
-            st.metric("Note du Coach", f"{note}/10")
-            
-            st.markdown("### 🔴 Les 3 moments décisifs")
-            severe = sorted(recs, key=lambda x: x['drop'], reverse=True)[:3]
-            for r in severe:
-                with st.expander(f"Coup {r['move_no']} : {r['category']} (-{r['drop']/100:.2f} pions)"):
-                    st.write(f"Tu as joué **{r['san']}**. Le meilleur coup suggéré était **{r['best']}**.")
-                    st.write("Conseil : Dans cette position, vérifie bien les menaces directes et les tactiques adverses.")
-            
-            with st.expander("Voir tout le détail des coups"):
-                st.dataframe(pd.DataFrame(recs), use_container_width=True, hide_index=True)
+            if len(recs) == 0:
+                st.warning("Aucun coup n'a pu être analysé. Vérifie que le pseudo dans la barre latérale correspond à l'un des deux joueurs.")
+            else:
+                st.markdown("### 📊 Fiche de performance")
+                note = calculer_note_partie(recs)
+                st.metric("Note du Coach", f"{note}/10")
+                
+                # Sélection des pires coups (drop > 0)
+                erreurs = [r for r in recs if r['drop'] >= 0]
+                severe = sorted(erreurs, key=lambda x: x['drop'], reverse=True)[:3]
+                
+                st.markdown("### 🔴 Les 3 moments décisifs")
+                for r in severe:
+                    with st.expander(f"Coup {r['move_no']} ({r['san']}) : {r['category']} (-{r['drop']/100:.2f} pions)"):
+                        st.write(f"Tu as joué **{r['san']}**. Le meilleur coup suggéré par Stockfish était **{r['best']}**.")
+                        st.write(f"Évaluation avant le coup : **{r['eval_before']}** | Après : **{r['eval_after']}**")
+                
+                with st.expander("Voir tout le détail des coups"):
+                    st.dataframe(pd.DataFrame(recs), use_container_width=True, hide_index=True)
         else:
             st.info("Clique sur le bouton ci-dessus pour lancer l'analyse de cette partie.")
 # Progress
