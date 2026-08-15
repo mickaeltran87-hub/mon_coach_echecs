@@ -142,6 +142,11 @@ def classify_drop(drop):
         return "Imprécision"
     return "OK"
 
+def calculer_note_partie(recs):
+    if not recs: return 10
+    total_drop = sum(r['drop'] for r in recs)
+    return round(max(0, 10 - (total_drop / 300)), 1)
+    
 def analyze_game(game, username, engine, depth=16, max_plies=160):
     if engine is None:
         return None
@@ -389,29 +394,21 @@ with tabs[2]:
 
         recs = st.session_state.get("analyses", {}).get(selected)
         if recs:
-            counts = Counter(r["category"] for r in recs)
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Gaffes", counts.get("Gaffe", 0))
-            c2.metric("Erreurs", counts.get("Erreur", 0))
-            c3.metric("Imprécisions", counts.get("Imprécision", 0))
-
-            st.markdown("### 🧑‍🏫 Commentaire du coach")
-            severe = sorted(recs, key=lambda x: x["drop"], reverse=True)[:5]
-            if not severe:
-                st.write("Aucune perte d'évaluation importante détectée.")
-            else:
-                for r in severe:
-                    st.markdown(
-                        f"**Coup {r['move_no']}. {r['san']} — {r['category']}**  \n"
-                        f"Perte estimée : **{r['drop']/100:.2f}**  | "
-                        f"Suggestion Stockfish : **{r['best']}**  \n"
-                        f"Thématique probable : **vérification des coups candidats / menace adverse**."
-                    )
-                    st.divider()
-
-            st.dataframe(pd.DataFrame(recs), use_container_width=True, hide_index=True)
+            st.markdown("### 📊 Fiche de performance")
+            note = calculer_note_partie(recs)
+            st.metric("Note du Coach", f"{note}/10")
+            
+            st.markdown("### 🔴 Les 3 moments décisifs")
+            severe = sorted(recs, key=lambda x: x['drop'], reverse=True)[:3]
+            for r in severe:
+                with st.expander(f"Coup {r['move_no']} : {r['category']} (-{r['drop']/100:.2f} pions)"):
+                    st.write(f"Tu as joué **{r['san']}**. Le meilleur coup suggéré était **{r['best']}**.")
+                    st.write("Conseil : Dans cette position, vérifie bien les menaces directes et les tactiques adverses avant de jouer.")
+            
+            with st.expander("Voir tout le détail des coups"):
+                st.dataframe(pd.DataFrame(recs), use_container_width=True, hide_index=True)
         else:
-            st.info("Lance l'analyse pour obtenir les erreurs et les commentaires.")
+            st.info("Lance l'analyse pour obtenir la note du coach et les moments clés.")
 
 # Progress
 with tabs[3]:
