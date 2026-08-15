@@ -491,7 +491,6 @@ with tabs[4]:
     st.markdown("### 🧩 Tes Puzzles Personnalisés (issus de tes parties)")
 
     analyses = st.session_state.get("analyses_map", {})
-    # Extraire uniquement les positions où il y a eu une Gaffe ou une Erreur
     puzzles = []
     for idx, recs in analyses.items():
         if recs:
@@ -506,7 +505,6 @@ with tabs[4]:
     else:
         st.write(f"**{len(puzzles)} moment(s) critique(s)** détecté(s) dans tes analyses :")
         
-        # Choisir un puzzle à réviser
         selected_puzzle_idx = st.selectbox(
             "Choisis un moment à rejouer :",
             range(len(puzzles)),
@@ -526,42 +524,84 @@ with tabs[4]:
     st.divider()
 
     # ------------------------------------
-    # SECTION 2 : RESSOURCES PÉDAGOGIQUES
+    # SECTION 2 : RECOMMANDATIONS VIDÉO DYNAMIQUES
     # ------------------------------------
-    st.markdown("### 📚 Bibliothèque & Liens Pédagogiques")
+    st.markdown("### 🎬 Vidéos recommandées pour tes axes de progression")
+
+    # Calcul des besoins prioritaires à partir des analyses
+    total_blunders = sum(sum(1 for r in recs if r["category"] == "Gaffe") for recs in analyses.values() if recs)
+    total_errors = sum(sum(1 for r in recs if r["category"] == "Erreur") for recs in analyses.values() if recs)
+
+    if total_blunders > 0:
+        st.warning("🔴 **Axe prioritaire : Réduire les gaffes et vérifier les menaces**")
+        st.markdown("""
+        * 🎥 [Éviter les gaffes aux échecs (Méthode de vérification)](https://www.youtube.com/results?search_query=eviter+les+gaffes+echecs)
+        * 🎥 [La vision tactique et la sécurité du Roi](https://www.youtube.com/results?search_query=vision+tactique+echecs+debutant)
+        """)
+    elif total_errors > 0:
+        st.warning("🟠 **Axe prioritaire : Calcul des coups candidats et prise de décision**")
+        st.markdown("""
+        * 🎥 [Comment calculer les coups candidats](https://www.youtube.com/results?search_query=coups+candidats+echecs)
+        * 🎥 [AMÉLIORER SON CALCUL AUX ÉCHECS](https://www.youtube.com/results?search_query=calcul+de+variantes+echecs)
+        """)
+    else:
+        st.success("🟢 **Axe recommandé : Maîtrise des plans et des finales**")
+        st.markdown("""
+        * 🎥 [Comment élaborer un plan aux échecs](https://www.youtube.com/results?search_query=elaborer+un+plan+aux+echecs)
+        * 🎥 [Les finales de pions fondamentales](https://www.youtube.com/results?search_query=finales+de+pions+echecs+les+bases)
+        """)
+
+    st.divider()
+
+    # ------------------------------------
+    # SECTION 3 : MÉDIATHÈQUE COMPLÈTE & LIENS
+    # ------------------------------------
+    st.markdown("### 📚 Bibliothèque Pédagogique par Thème")
 
     cat_tactique, cat_ouvertures, cat_finales, cat_outils = st.tabs([
         "🧩 Tactique & Calcul", 
-        "📖 Ouvertures", 
+        "📖 Ouvertures & Stratégie", 
         "👑 Finales", 
-        "🛠️ Outils & Analyse"
+        "🛠️ Outils & Plateformes"
     ])
 
     with cat_tactique:
         st.markdown("""
-        **Entraînement quotidien au calcul :**
-        * 🧩 [Lichess Puzzles](https://lichess.org/training) — Exercices gratuits illimités classés par niveau.
-        * ⚔️ [Lichess Puzzle Racer](https://lichess.org/racer) — Course de vitesse tactique pour travailler les réflexes.
-        * 🎯 [Chess.com Puzzles](https://www.chess.com/puzzles) — Puzzles quotidiens et suivi de niveau.
+        **Vidéos Thématiques :**
+        * 🎥 [Julien Song — Les motifs tactiques indispensables](https://www.youtube.com/results?search_query=julien+song+tactique+echecs)
+        * 🎥 [Apprendre les échecs en douceur — Travailler la tactique](https://www.youtube.com/results?search_query=apprendre+les+echecs+en+douceur+tactique)
+
+        **Plateformes d'exercices :**
+        * 🧩 [Lichess Puzzles](https://lichess.org/training) — Exercices gratuits illimités.
+        * ⚔️ [Lichess Puzzle Racer](https://lichess.org/racer) — Entraînement à la vitesse de calcul.
         """)
 
     with cat_ouvertures:
         st.markdown("""
-        **Compréhension et répertoire :**
-        * 📚 [Lichess Opening Explorer](https://lichess.org/analysis#explorer) — Base de données de master games et statistiques d'ouvertures.
-        * 🎥 [Chessable](https://www.chessable.com) — Apprentissage des lignes d'ouvertures par répétition espacée.
+        **Vidéos Thématiques :**
+        * 🎥 [Les grands principes de l'ouverture](https://www.youtube.com/results?search_query=principes+des+ouvertures+echecs)
+        * 🎥 [Comment construire un répertoire d'ouvertures solide](https://www.youtube.com/results?search_query=construire+repertoire+ouverture+echecs)
+
+        **Base de données :**
+        * 📚 [Lichess Opening Explorer](https://lichess.org/analysis#explorer) — Statistiques et lignes théoriques.
+        * 📦 [Chessable](https://www.chessable.com) — Apprentissage par répétition espacée.
         """)
 
     with cat_finales:
         st.markdown("""
-        **Maîtrise des fin de parties :**
-        * 👑 [Lichess Practice - Finales](https://lichess.org/practice) — Modules interactifs sur les finales fondamentales (pions, tours, pièces mineures).
-        * 🧮 [Syzygy Endgame Tablebases](https://syzygy-tables.info) — Base de données résolue jusqu'à 7 pièces.
+        **Vidéos Thématiques :**
+        * 🎥 [Les finales de Tours indispensables](https://www.youtube.com/results?search_query=finales+de+tours+echecs)
+        * 🎥 [La règle de l'opposition dans les finales de pions](https://www.youtube.com/results?search_query=opposition+finales+pions+echecs)
+
+        **Modules interactifs :**
+        * 👑 [Lichess Practice - Finales](https://lichess.org/practice) — Entraînement guidé sur les finales clés.
+        * 🧮 [Syzygy Endgame Tablebases](https://syzygy-tables.info) — Tablebases officielles des finales.
         """)
 
     with cat_outils:
         st.markdown("""
-        **Logiciels et outils de travail :**
-        * 🔍 [Lichess Board Editor & Analysis](https://lichess.org/analysis) — Échiquier d'analyse gratuit avec Stockfish complet.
-        * 📦 [ChessBase India / YouTube](https://www.youtube.com/@ChessBaseIndiachannel) — Analyses pédagogiques et grands maîtres.
+        **Outils de travail & Chaînes YouTube conseillées :**
+        * 🔍 [Lichess Analysis Board](https://lichess.org/analysis) — Échiquier d'analyse gratuit avec Stockfish.
+        * 🎥 [Blitzstream (YouTube)](https://www.youtube.com/@Blitzstream) — Analyses pédagogiques et parties commentées.
+        * 🎥 [Capablanca / Chess.com France](https://www.youtube.com/@chesscomfr) — Cours et cours de maîtres en français.
         """)
