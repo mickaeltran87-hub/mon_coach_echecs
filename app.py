@@ -250,6 +250,14 @@ def calculate_stats(games, analyses, username):
                 stats["inaccuracies"] += 1
     return stats
 
+def calculer_note_partie(recs):
+    if not recs: return 10
+    # On calcule une pénalité basée sur la perte d'évaluation totale
+    total_drop = sum(r['drop'] for r in recs)
+    # Plus il y a de perte, plus la note baisse
+    note = max(0, 10 - (total_drop / 300)) 
+    return round(note, 1)
+    
 # -----------------------------
 # UI
 # -----------------------------
@@ -369,49 +377,32 @@ with tabs[2]:
     if not games:
         st.info("Aucune partie.")
     else:
-        labels = []
-        for i, g in enumerate(games):
-            labels.append(
-                f"{i} — {g.headers.get('Date','')} — "
-                f"{g.headers.get('White','')} vs {g.headers.get('Black','')} — "
-                f"{outcome_label(result_for_user(g, username))}"
-            )
+        labels = [f"{i} — {g.headers.get('Date','')} — {g.headers.get('White','')} vs {g.headers.get('Black','')} — {outcome_label(result_for_user(g, username))}" for i, g in enumerate(games)]
         selected = st.selectbox("Choisis une partie", range(len(labels)), format_func=lambda i: labels[i])
 
-        if st.button("🧠 Analyser avec Stockfish", type="primary"):
+        if st.button("🧠 Lancer l'analyse du coach", type="primary"):
             if engine is None:
-                st.error("Stockfish est nécessaire pour cette fonction.")
+                st.error("Stockfish est nécessaire.")
             else:
-                with st.spinner("Analyse en cours…"):
+                with st.spinner("Analyse approfondie en cours..."):
                     result = analyze_game(games[selected], username, engine, depth=depth)
                     st.session_state.setdefault("analyses", {})[selected] = result
-                    st.success("Analyse terminée.")
-
+        
         recs = st.session_state.get("analyses", {}).get(selected)
         if recs:
-            counts = Counter(r["category"] for r in recs)
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Gaffes", counts.get("Gaffe", 0))
-            c2.metric("Erreurs", counts.get("Erreur", 0))
-            c3.metric("Imprécisions", counts.get("Imprécision", 0))
-
-            st.markdown("### 🧑‍🏫 Commentaire du coach")
-            severe = sorted(recs, key=lambda x: x["drop"], reverse=True)[:5]
-            if not severe:
-                st.write("Aucune perte d'évaluation importante détectée.")
-            else:
-                for r in severe:
-                    st.markdown(
-                        f"**Coup {r['move_no']}. {r['san']} — {r['category']}**  \n"
-                        f"Perte estimée : **{r['drop']/100:.2f}**  | "
-                        f"Suggestion Stockfish : **{r['best']}**  \n"
-                        f"Thématique probable : **vérification des coups candidats / menace adverse**."
-                    )
-                    st.divider()
-
-            st.dataframe(pd.DataFrame(recs), use_container_width=True, hide_index=True)
-        else:
-            st.info("Lance l'analyse pour obtenir les erreurs et les commentaires.")
+            st.markdown("### 📊 Fiche de performance")
+            note = calculer_note_partie(recs)
+            st.metric("Note du Coach", f"{note}/10")
+            
+            st.markdown("### 🔴 Les 3 moments décisifs")
+            severe = sorted(recs, key=lambda x: x['drop'], reverse=True)[:3]
+            for r in severe:
+                with st.expander(f"Coup {r['move_no']} : {r['category']} ({r['drop']/100:.2f} pions perdus)"):
+                    st.write(f"Tu as joué **{r['san']}**. Le meilleur coup était **{r['best']}**.")
+                    st.write("Conseil : Dans cette position, le danger immédiat était probablement une tactique ou une menace directe que tu n'as pas vu venir.")
+            
+            with st.expander("Voir tout le détail des coups"):
+                st.dataframe(pd.DataFrame(recs), use_container_width=True)
 
 # Progress
 with tabs[3]:
