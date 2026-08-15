@@ -159,23 +159,24 @@ def analyze_game(game, username, engine, depth=16, max_plies=160):
 
         mover = board.turn
         before = board.copy()
-        info_before = engine.analyse(
-            before,
-            chess.engine.Limit(depth=depth),
-            multipv=1,
-        )
-        best = info_before["pv"][0] if info_before.get("pv") else None
-        eval_before = score_cp(info_before["score"], u_color)
+        
+        try:
+            info_before = engine.analyse(before, chess.engine.Limit(depth=depth), multipv=1)
+            pv_before = info_before.get("pv")
+            best = pv_before[0] if pv_before else None
+            eval_before = score_cp(info_before["score"], u_color)
+        except Exception:
+            board.push(move)
+            continue
 
         san = board.san(move)
         board.push(move)
 
-        info_after = engine.analyse(
-            board,
-            chess.engine.Limit(depth=depth),
-            multipv=1,
-        )
-        eval_after = score_cp(info_after["score"], u_color)
+        try:
+            info_after = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=1)
+            eval_after = score_cp(info_after["score"], u_color)
+        except Exception:
+            eval_after = eval_before
 
         if mover == u_color:
             drop = max(0, eval_before - eval_after)
