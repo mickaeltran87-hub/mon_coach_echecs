@@ -341,7 +341,7 @@ tabs = st.tabs(["🏠 Tableau de bord", "♟️ Mes parties", "🔎 Analyse", "�
 # Dashboard
 with tabs[0]:
     st.subheader("Ton tableau de bord")
-    analyses = st.session_state.get("analyses", {})
+    analyses = st.session_state.get("analyses_map", {})
     stats = calculate_stats(games, analyses, username)
 
     c1, c2, c3, c4 = st.columns(4)
@@ -434,24 +434,43 @@ with tabs[2]:
 # Progress
 with tabs[3]:
     st.subheader("📈 Progression")
-    analyses = st.session_state.get("analyses", {})
-    if not analyses:
-        st.info("Analyse quelques parties pour commencer à construire ton historique.")
+    analyses = st.session_state.get("analyses_map", {})
+    
+    # Filtrer uniquement les parties ayant une analyse valide
+    analyses_valides = {idx: recs for idx, recs in analyses.items() if recs}
+    
+    if not analyses_valides:
+        st.info("Analyse quelques parties dans l'onglet 'Analyse' pour commencer à construire ton suivi de progression.")
     else:
         timeline = []
-        for idx, recs in analyses.items():
-            if recs is None:
-                continue
+        for idx, recs in analyses_valides.items():
             g = games[int(idx)]
+            date_str = g.headers.get("Date", "Inconnue")
+            
+            gaffes = sum(1 for r in recs if r["category"] == "Gaffe")
+            erreurs = sum(1 for r in recs if r["category"] == "Erreur")
+            imprecisions = sum(1 for r in recs if r["category"] == "Imprécision")
+            note = calculer_note_partie(recs)
+            
             timeline.append({
-                "Date": g.headers.get("Date", ""),
-                "Gaffes": sum(r["category"] == "Gaffe" for r in recs),
-                "Erreurs": sum(r["category"] == "Erreur" for r in recs),
-                "Imprécisions": sum(r["category"] == "Imprécision" for r in recs),
+                "Partie": f"P{idx} ({date_str})",
+                "Date": date_str,
+                "Note Coach": note,
+                "Gaffes": gaffes,
+                "Erreurs": erreurs,
+                "Imprécisions": imprecisions,
             })
+            
         if timeline:
             df = pd.DataFrame(timeline).sort_values("Date")
-            st.line_chart(df.set_index("Date"))
+            
+            st.markdown("### 📊 Évolution des erreurs par partie")
+            st.line_chart(df.set_index("Partie")[["Gaffes", "Erreurs", "Imprécisions"]])
+            
+            st.markdown("### 📈 Évolution de la Note du Coach")
+            st.line_chart(df.set_index("Partie")[["Note Coach"]])
+            
+            st.markdown("### 📋 Historique détaillé")
             st.dataframe(df, use_container_width=True, hide_index=True)
 
         st.markdown("### 🎯 Axes de progression actuels")
