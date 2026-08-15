@@ -382,7 +382,7 @@ with tabs[2]:
                 f"{g.headers.get('White','')} vs {g.headers.get('Black','')} — "
                 f"{outcome_label(result_for_user(g, username))}"
             )
-        selected = st.selectbox("Choisis une partie", range(len(labels)), format_func=lambda i: labels[i])
+        selected = st.selectbox("Choisis une partie", range(len(labels)), format_func=lambda i: labels[i], key="select_game_analyse")
 
         if st.button("🧠 Analyser avec Stockfish", type="primary"):
             if engine is None:
@@ -390,11 +390,14 @@ with tabs[2]:
             else:
                 with st.spinner("Analyse en cours…"):
                     result = analyze_game(games[selected], username, engine, depth=depth)
+                    st.session_state["curr_analysis"] = result
                     st.session_state.setdefault("analyses", {})[selected] = result
                     st.success("Analyse terminée.")
-                    st.rerun()
 
-        recs = st.session_state.get("analyses", {}).get(selected)
+        recs = st.session_state.get("curr_analysis")
+        if not recs:
+            recs = st.session_state.get("analyses", {}).get(selected)
+
         if recs:
             st.markdown("### 📊 Fiche de performance")
             note = calculer_note_partie(recs)
