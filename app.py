@@ -392,6 +392,7 @@ with tabs[2]:
                     result = analyze_game(games[selected], username, engine, depth=depth)
                     st.session_state.setdefault("analyses", {})[selected] = result
                     st.success("Analyse terminée.")
+                    st.rerun()
 
         recs = st.session_state.get("analyses", {}).get(selected)
         if recs:
@@ -409,7 +410,7 @@ with tabs[2]:
             with st.expander("Voir tout le détail des coups"):
                 st.dataframe(pd.DataFrame(recs), use_container_width=True, hide_index=True)
         else:
-            st.info("Lance l'analyse pour obtenir la note du coach et les moments clés.")
+            st.info("Clique sur le bouton ci-dessus pour lancer l'analyse de cette partie.")
 
 # Progress
 with tabs[3]:
