@@ -578,8 +578,48 @@ with tabs[3]:
             "- **4. Gestion du temps :** réserver la réflexion longue aux positions réellement critiques."
         )
 
-# Training & Resources
+# Statistiques
 with tabs[4]:
+    st.subheader("📈 Mes performances par ouverture")
+    
+    # Appel de ta fonction d'extraction (games et username sont déjà définis dans ton code)
+    df_stats = extraire_stats_ouvertures(games, username)
+
+    if not df_stats.empty:
+        # Sélecteur pour analyser spécifiquement tes parties avec les Blancs ou les Noirs
+        couleur_choisie = st.radio("Analyser les parties avec les :", ["Blancs", "Noirs"], horizontal=True)
+        
+        # On filtre le dataframe selon la couleur choisie
+        df_filtre = df_stats[df_stats["Couleur"] == couleur_choisie]
+        
+        if not df_filtre.empty:
+            # On regroupe les données pour compter les victoires, nulles et défaites
+            tableau_resume = df_filtre.groupby("Ouverture")["Résultat"].value_counts().unstack().fillna(0)
+            
+            # On s'assure que les 3 colonnes existent même s'il n'y a pas eu ce résultat
+            for col in ["Victoire", "Nulle", "Défaite"]:
+                if col not in tableau_resume.columns:
+                    tableau_resume[col] = 0
+                    
+            # On calcule le total et on trie pour avoir les ouvertures les plus jouées en haut
+            tableau_resume["Total"] = tableau_resume.sum(axis=1)
+            tableau_resume = tableau_resume.sort_values("Total", ascending=False).astype(int)
+            
+            # Réorganisation de l'ordre des colonnes pour un affichage plus logique
+            tableau_resume = tableau_resume[["Victoire", "Nulle", "Défaite", "Total"]]
+            
+            # Affichage du tableau interactif
+            st.dataframe(tableau_resume, use_container_width=True)
+            
+            # Graphique en barres
+            st.bar_chart(tableau_resume[["Victoire", "Nulle", "Défaite"]])
+        else:
+            st.info(f"Aucune partie trouvée avec les {couleur_choisie} dans l'échantillon analysé.")
+    else:
+        st.warning("Pas assez de données pour générer des statistiques sur les ouvertures.")
+
+# Training & Resources
+with tabs[5]:
     st.subheader("🎯 Entraînement & Ressources Pédagogiques")
 
     # ------------------------------------
