@@ -287,20 +287,24 @@ if not username:
 
 # Load data
 if "games" not in st.session_state:
-    with st.spinner("Récupération des parties Chess.com…"):
+    with st.spinner("Récupération de tes parties (sans le blitz)..."):
         try:
             archives = get_archives(username)
             selected_archives = archives[-months:]
             raw_games = []
             for url in reversed(selected_archives):
                 raw_games.extend(get_month_games(url))
-                if len(raw_games) >= max_games:
-                    break
+            
+            # --- MODIFICATION ICI : Filtrage avant le parsing ---
+            filtered_raw_games = [g for g in raw_games if est_une_partie_longue(g)]
+            
             parsed = []
-            for gd in raw_games[:max_games]:
+            # On utilise les parties filtrées
+            for gd in filtered_raw_games[:max_games]:
                 g = parse_game(gd)
                 if g:
                     parsed.append(g)
+            
             st.session_state["games"] = parsed
             st.session_state["loaded_at"] = datetime.now(timezone.utc).isoformat()
         except Exception as e:
