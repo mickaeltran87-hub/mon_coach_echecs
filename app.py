@@ -13,32 +13,33 @@ import requests
 import streamlit as st
 import pandas as pd
 
-def generate_gemini_prompt(game, analysis_recs=None):
+def generate_gemini_prompt(game):
     """Génère un texte formaté pour l'analyse avec Gemini."""
-    white = game.headers.get('White', 'Inconnu')
-    black = game.headers.get('Black', 'Inconnu')
-    date = game.headers.get('Date', 'Inconnu')
-    
-    # Récupération du PGN de la partie
-    pgn_str = str(game)
+    # Ces clés doivent correspondre exactement à celles de ton dictionnaire 'game'
+    blunders = game.get('blunders', 'Aucune') 
+    mistakes = game.get('mistakes', 'Aucune')
+    pgn = game.get('pgn', 'Pas de PGN disponible')
     
     prompt = f"""
 Voici ma partie d'échecs pour une analyse pédagogique :
 
 --- INFOS PARTIE ---
-- Date : {date}
-- Blancs : {white}
-- Noirs : {black}
+- Blancs : {game.get('white', 'Inconnu')}
+- Noirs : {game.get('black', 'Inconnu')}
+- Résultat : {game.get('result', 'Inconnu')}
+- Ouverture : {game.get('opening', 'Inconnu')}
 
---- RAPPORT STOCKFISH ---
-{analysis_recs if analysis_recs else "Aucune analyse Stockfish détaillée pour le moment."}
+--- ANALYSE STOCKFISH ---
+- Gaffes (Blunders) : {blunders}
+- Erreurs (Mistakes) : {mistakes}
 
 --- PGN ---
-{pgn_str}
+{pgn}
 
 --- TA MISSION ---
-Peux-tu analyser cette partie ? Concentre-toi sur les moments clés et les erreurs. 
-Explique-moi le "pourquoi" stratégique et aide-moi à progresser.
+Peux-tu analyser cette partie ? Concentre-toi sur les moments clés (les gaffes/erreurs). 
+Explique-moi le "pourquoi" stratégique derrière les coups tactiques manqués. 
+Aide-moi à comprendre ma faille principale dans cette partie.
     """
     return prompt
 
@@ -532,7 +533,7 @@ with tabs[2]:
         analyses_map = st.session_state.get("analyses_map", {})
         recs = analyses_map.get(selected)
 
-        def generate_gemini_prompt(game, analysis_recs=None):
+ def generate_gemini_prompt(game, analysis_recs=None):
     """Génère un texte formaté pour l'analyse avec Gemini."""
     white = game.headers.get('White', 'Inconnu')
     black = game.headers.get('Black', 'Inconnu')
