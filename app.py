@@ -225,47 +225,7 @@ def calculer_note_partie(recs):
     total_drop = sum(r['drop'] for r in recs)
     return round(max(0, 10 - (total_drop / 300)), 1)
 
-def identifier_theme_coup(before_board, move, drop):
-    """
-    Identifie le thème tactique ou stratégique du coup joué
-    en analysant l'état de l'échiquier avant et après le coup.
-    """
-    if drop < 50:
-        return "Coup solide"
 
-    mover = before_board.turn
-    piece_moved = before_board.piece_at(move.from_square)
-    
-    # Évaluation après le coup joué
-    after_board = before_board.copy()
-    after_board.push(move)
-
-    # 1. Pièce pendante / non protégée laissée en prise
-    if after_board.is_capture(move) is False:
-        to_square = move.to_square
-        if after_board.is_attacked_by(not mover, to_square) and not after_board.is_attacked_by(mover, to_square):
-            return "Pièce suspendue (non protégée)"
-
-    # 2. Échec évitable / Roi exposé
-    if after_board.is_check():
-        return "Roi exposé / Échec subi"
-
-    # 3. Raté d'une capture ou d'un gain de pièce (si la case d'arrivée n'est pas une capture)
-    captures_visibles = list(before_board.generate_legal_captures())
-    if captures_visibles and not before_board.is_capture(move):
-        return "Tactique ou capture ratée"
-
-    # 4. Développement précoce de la Dame / Perte de tempo
-    if piece_moved and piece_moved.piece_type == chess.QUEEN and before_board.fullmove_number <= 10:
-        return "Sortie de Dame précoce / Perte de tempo"
-
-    # 5. Défense passive ou manque de contrôle du centre
-    if drop >= 250:
-        return "Gaffe tactique majeure"
-    elif drop >= 100:
-        return "Erreur de calcul / Structure"
-    
-    return "Imprécision positionnelle"
 
 def analyze_game(game, username, engine, depth=12, max_plies=160):
     if engine is None:
