@@ -13,33 +13,32 @@ import requests
 import streamlit as st
 import pandas as pd
 
-def generate_gemini_prompt(game):
+def generate_gemini_prompt(game, analysis_recs=None):
     """Génère un texte formaté pour l'analyse avec Gemini."""
-    # Ces clés doivent correspondre exactement à celles de ton dictionnaire 'game'
-    blunders = game.get('blunders', 'Aucune') 
-    mistakes = game.get('mistakes', 'Aucune')
-    pgn = game.get('pgn', 'Pas de PGN disponible')
+    white = game.headers.get('White', 'Inconnu')
+    black = game.headers.get('Black', 'Inconnu')
+    date = game.headers.get('Date', 'Inconnu')
+    
+    # Récupération du PGN de la partie
+    pgn_str = str(game)
     
     prompt = f"""
 Voici ma partie d'échecs pour une analyse pédagogique :
 
 --- INFOS PARTIE ---
-- Blancs : {game.get('white', 'Inconnu')}
-- Noirs : {game.get('black', 'Inconnu')}
-- Résultat : {game.get('result', 'Inconnu')}
-- Ouverture : {game.get('opening', 'Inconnu')}
+- Date : {date}
+- Blancs : {white}
+- Noirs : {black}
 
---- ANALYSE STOCKFISH ---
-- Gaffes (Blunders) : {blunders}
-- Erreurs (Mistakes) : {mistakes}
+--- RAPPORT STOCKFISH ---
+{analysis_recs if analysis_recs else "Aucune analyse Stockfish détaillée pour le moment."}
 
 --- PGN ---
-{pgn}
+{pgn_str}
 
 --- TA MISSION ---
-Peux-tu analyser cette partie ? Concentre-toi sur les moments clés (les gaffes/erreurs). 
-Explique-moi le "pourquoi" stratégique derrière les coups tactiques manqués. 
-Aide-moi à comprendre ma faille principale dans cette partie.
+Peux-tu analyser cette partie ? Concentre-toi sur les moments clés et les erreurs. 
+Explique-moi le "pourquoi" stratégique et aide-moi à progresser.
     """
     return prompt
 
