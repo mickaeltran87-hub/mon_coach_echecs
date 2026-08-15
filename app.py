@@ -563,35 +563,31 @@ Explique-moi le "pourquoi" stratégique et aide-moi à progresser.
     return prompt
 
 if recs is not None:
-            if len(recs) == 0:
-                st.warning("Aucun coup n'a pu être analysé. Vérifie que le pseudo dans la barre latérale correspond à l'un des deux joueurs.")
-            else:
-                st.markdown("### 📊 Fiche de performance")
-                note = calculer_note_partie(recs)
-                st.metric("Note du Coach", f"{note}/10")
-                
-                # Sélection des pires coups (drop > 0)
-                erreurs = [r for r in recs if r['drop'] >= 0]
-                severe = sorted(erreurs, key=lambda x: x['drop'], reverse=True)[:3]
-                
-                st.markdown("### 🔴 Les 3 moments décisifs (Analyse Pédagogique)")
-                for r in severe:
-                    with st.expander(f"Coup {r['move_no']} ({r['san']}) — {r['theme']} (-{r['drop']/100:.2f} pions)"):
-                        st.write(f"🏷️ **Thème identifié :** `{r['theme']}`")
-                        st.write(f"❌ **Ton coup :** **{r['san']}** (Éval : {r['eval_after']})")
-                        st.write(f"💡 **Recommandation Stockfish :** **{r['best']}** (Éval : {r['eval_before']})")
-                        
-                        # Explications personnalisées selon le thème
-                        if "Pièce suspendue" in r['theme']:
-                            st.warning("🧠 **Conseil du Coach :** Vérifie toujours si la case où tu déplaces ta pièce est attaquée et si ton coup laisse une pièce sans défense.")
-                        elif "Tactique" in r['theme']:
-                            st.warning("🧠 **Conseil du Coach :** Prends 5 secondes pour scanner les échecs, prises et menaces directes avant de jouer.")
-                        elif "Sortie de Dame" in r['theme']:
-                            st.warning("🧠 **Conseil du Coach :** Développe d'abord tes Cavaliers et Fous avant de sortir ta Dame.")
-                        else:
-                            st.info("🧠 **Conseil du Coach :** Analyse la réponse adverse la plus forcée sur ce coup.")
+        if len(recs) == 0:
+            st.warning("Aucun coup n'a pu être analysé. Vérifie que le pseudo dans la barre latérale correspond à l'un des deux joueurs.")
         else:
-            st.info("Clique sur le bouton ci-dessus pour lancer l'analyse de cette partie.")
+            st.markdown("### 📊 Fiche de performance")
+            note = calculer_note_partie(recs)
+            st.metric("Note du Coach", f"{note}/10")
+
+            # Sélection des pires coups (drop > 0)
+            erreurs = [r for r in recs if r['drop'] >= 0]
+            severe = sorted(erreurs, key=lambda x: x['drop'], reverse=True)[:3]
+
+            st.markdown("### 🔴 Les 3 moments décisifs (Analyse Pédagogique)")
+            for r in severe:
+                with st.expander(f"Coup {r['move_no']} ({r['san']}) – ({r['theme']} (-{r['drop']/100:.2f} pions)"):
+                    st.write(f"✏️ **Thème identifié :** `{r['theme']}`")
+                    st.write(f"❌ **Ton coup :** **{r['san']}** (Éval : {r['eval_after']})")
+                    st.write(f"💡 **Recommandation Stockfish :** **{r['best']}** (Éval : {r['eval_before']})")
+        
+        st.divider()
+        if st.button("📋 Copier pour Analyse Gemini", key="btn_gemini_analyse"):
+            current_game = games[selected]
+            prompt = generate_gemini_prompt(current_game, recs)
+            st.info("Copie le texte ci-dessous et colle-le dans notre discussion !")
+            st.text_area("Texte à copier", value=prompt, height=200)
+            
 # Progress
 with tabs[3]:
     st.subheader("📈 Progression")
