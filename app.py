@@ -11,7 +11,51 @@ import chess.engine
 import pandas as pd
 import requests
 import streamlit as st
+import pandas as pd
 
+def extraire_stats_ouvertures(parties_pgn, pseudo):
+    """
+    Parcourt une liste d'objets chess.pgn.Game et extrait les statistiques
+    de victoire/nulle/défaite par ouverture pour un joueur donné.
+    """
+    donnees = []
+    
+    for partie in parties_pgn:
+        headers = partie.headers
+        eco = headers.get("ECO", "Inconnu")
+        
+        # Sur Chess.com, l'URL de l'ECO contient souvent le nom lisible de l'ouverture
+        eco_url = headers.get("ECOUrl", "")
+        nom_ouverture = eco_url.split("/")[-1].replace("-", " ") if eco_url else eco
+        
+        blanc = headers.get("White", "").lower()
+        noir = headers.get("Black", "").lower()
+        resultat = headers.get("Result", "*")
+        pseudo_min = pseudo.lower()
+        
+        if pseudo_min == blanc:
+            couleur = "Blancs"
+            if resultat == "1-0": issue = "Victoire"
+            elif resultat == "0-1": issue = "Défaite"
+            elif resultat == "1/2-1/2": issue = "Nulle"
+            else: continue
+        elif pseudo_min == noir:
+            couleur = "Noirs"
+            if resultat == "0-1": issue = "Victoire"
+            elif resultat == "1-0": issue = "Défaite"
+            elif resultat == "1/2-1/2": issue = "Nulle"
+            else: continue
+        else:
+            continue # Si le joueur n'est pas dans la partie
+
+        donnees.append({
+            "Couleur": couleur,
+            "Ouverture": nom_ouverture,
+            "Résultat": issue
+        })
+        
+    return pd.DataFrame(donnees)
+    
 APP_TITLE = "♟️ Mon Coach d'Échecs"
 CHESS_API = "https://api.chess.com/pub"
 
