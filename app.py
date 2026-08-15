@@ -373,32 +373,29 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("Analyse d'une partie")
     if not games:
-        st.info("Aucune partie.")
+        st.info("Aucune partie disponible.")
     else:
-        labels = []
-        for i, g in enumerate(games):
-            labels.append(
-                f"{i} — {g.headers.get('Date','')} — "
-                f"{g.headers.get('White','')} vs {g.headers.get('Black','')} — "
-                f"{outcome_label(result_for_user(g, username))}"
-            )
+        labels = [
+            f"{i} — {g.headers.get('Date','')} — {g.headers.get('White','')} vs {g.headers.get('Black','')} — {outcome_label(result_for_user(g, username))}"
+            for i, g in enumerate(games)
+        ]
         selected = st.selectbox("Choisis une partie", range(len(labels)), format_func=lambda i: labels[i], key="select_game_analyse")
 
         if st.button("🧠 Analyser avec Stockfish", type="primary"):
             if engine is None:
-                st.error("Stockfish est nécessaire pour cette fonction.")
+                st.error("⚠️ Stockfish n'est pas disponible sur le serveur Cloud. Ajoute un fichier 'packages.txt' avec 'stockfish' sur ton dépôt GitHub.")
             else:
                 with st.spinner("Analyse approfondie en cours…"):
-                    result = analyze_game(games[selected], username, engine, depth=depth)
-                    st.session_state["curr_analysis"] = result
-                    st.session_state.setdefault("analyses", {})[selected] = result
+                    res = analyze_game(games[selected], username, engine, depth=depth)
+                    if "analyses_map" not in st.session_state:
+                        st.session_state["analyses_map"] = {}
+                    st.session_state["analyses_map"][selected] = res
 
-        # On récupère l'analyse en priorité depuis la session courante ou le cache global
-        recs = st.session_state.get("curr_analysis")
-        if not recs:
-            recs = st.session_state.get("analyses", {}).get(selected)
+        # Récupération de l'analyse
+        analyses_map = st.session_state.get("analyses_map", {})
+        recs = analyses_map.get(selected)
 
-        if recs:
+        if recs is not None:
             st.markdown("### 📊 Fiche de performance")
             note = calculer_note_partie(recs)
             st.metric("Note du Coach", f"{note}/10")
@@ -408,7 +405,7 @@ with tabs[2]:
             for r in severe:
                 with st.expander(f"Coup {r['move_no']} : {r['category']} (-{r['drop']/100:.2f} pions)"):
                     st.write(f"Tu as joué **{r['san']}**. Le meilleur coup suggéré était **{r['best']}**.")
-                    st.write("Conseil : Dans cette position, vérifie bien les menaces directes et les tactiques adverses avant de jouer.")
+                    st.write("Conseil : Dans cette position, vérifie bien les menaces directes et les tactiques adverses.")
             
             with st.expander("Voir tout le détail des coups"):
                 st.dataframe(pd.DataFrame(recs), use_container_width=True, hide_index=True)
