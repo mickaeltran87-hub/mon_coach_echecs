@@ -150,7 +150,7 @@ def est_une_partie_longue(game_dict):
         seconds = int(time_control.split('+')[0])
         return seconds >= 600
     except (ValueError, AttributeError, IndexError):
-        return False
+        return True
 
 # -----------------------------
 # Stockfish analysis
@@ -394,10 +394,14 @@ if not username:
 
 # Load data
 if "games" not in st.session_state:
-    with st.spinner("Récupération de tes parties (sans le blitz)..."):
+    with st.spinner("Récupération de tes parties..."):
         try:
             archives = get_archives(username)
+            st.write(f"Archives trouvées : {archives}") # <--- AJOUTE ÇA
+            
             selected_archives = archives[-months:]
+            st.write(f"Archives sélectionnées : {selected_archives}") # <--- AJOUTE ÇA
+            
             raw_games = []
             for url in reversed(selected_archives):
                 raw_games.extend(get_month_games(url))
