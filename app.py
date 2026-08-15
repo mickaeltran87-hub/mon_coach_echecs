@@ -407,7 +407,7 @@ if "games" not in st.session_state:
                 raw_games.extend(get_month_games(url))
             
             filtered_raw_games = [g for g in raw_games if est_une_partie_longue(g)]
-            
+            filtered_raw_games.reverse()
             parsed = []
             for gd in filtered_raw_games[:max_games]:
                 g = parse_game(gd)
