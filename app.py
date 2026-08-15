@@ -150,7 +150,49 @@ def calculer_note_partie(recs):
     if not recs: return 10
     total_drop = sum(r['drop'] for r in recs)
     return round(max(0, 10 - (total_drop / 300)), 1)
+
+def identifier_theme_coup(before_board, move, drop):
+    """
+    Identifie le thème tactique ou stratégique du coup joué
+    en analysant l'état de l'échiquier avant et après le coup.
+    """
+    if drop < 50:
+        return "Coup solide"
+
+    mover = before_board.turn
+    piece_moved = before_board.piece_at(move.from_square)
     
+    # Évaluation après le coup joué
+    after_board = before_board.copy()
+    after_board.push(move)
+
+    # 1. Pièce pendante / non protégée laissée en prise
+    if after_board.is_capture(move) is False:
+        to_square = move.to_square
+        if after_board.is_attacked_by(not mover, to_square) and not after_board.is_attacked_by(mover, to_square):
+            return "Pièce suspendue (non protégée)"
+
+    # 2. Échec évitable / Roi exposé
+    if after_board.is_check():
+        return "Roi exposé / Échec subi"
+
+    # 3. Raté d'une capture ou d'un gain de pièce (si la case d'arrivée n'est pas une capture)
+    captures_visibles = list(before_board.generate_legal_captures())
+    if captures_visibles and not before_board.is_capture(move):
+        return "Tactique ou capture ratée"
+
+    # 4. Développement précoce de la Dame / Perte de tempo
+    if piece_moved and piece_moved.piece_type == chess.QUEEN and before_board.fullmove_number <= 10:
+        return "Sortie de Dame précoce / Perte de tempo"
+
+    # 5. Défense passive ou manque de contrôle du centre
+    if drop >= 250:
+        return "Gaffe tactique majeure"
+    elif drop >= 100:
+        return "Erreur de calcul / Structure"
+    
+    return "Imprécision positionnelle"
+
 def analyze_game(game, username, engine, depth=12, max_plies=160):
     if engine is None:
         return []
@@ -198,15 +240,18 @@ def analyze_game(game, username, engine, depth=12, max_plies=160):
         except Exception:
             eval_after = eval_before
 
-        # Enregistrement des coups du joueur
+       # Enregistrement des coups du joueur
         if mover == u_color:
             drop = max(0, eval_before - eval_after)
+            theme = identifier_theme_coup(before, move, drop)
+            
             records.append({
                 "ply": ply + 1,
                 "move_no": ply // 2 + 1,
                 "san": san,
                 "drop": round(drop, 1),
                 "category": classify_drop(drop),
+                "theme": theme,  # <-- NOUVEAU CHAMP THÉMATIQUE
                 "best": before.san(best_move) if best_move else "",
                 "eval_before": round(eval_before / 100, 2),
                 "eval_after": round(eval_after / 100, 2),
@@ -421,14 +466,22 @@ with tabs[2]:
                 erreurs = [r for r in recs if r['drop'] >= 0]
                 severe = sorted(erreurs, key=lambda x: x['drop'], reverse=True)[:3]
                 
-                st.markdown("### 🔴 Les 3 moments décisifs")
+                st.markdown("### 🔴 Les 3 moments décisifs (Analyse Pédagogique)")
                 for r in severe:
-                    with st.expander(f"Coup {r['move_no']} ({r['san']}) : {r['category']} (-{r['drop']/100:.2f} pions)"):
-                        st.write(f"Tu as joué **{r['san']}**. Le meilleur coup suggéré par Stockfish était **{r['best']}**.")
-                        st.write(f"Évaluation avant le coup : **{r['eval_before']}** | Après : **{r['eval_after']}**")
-                
-                with st.expander("Voir tout le détail des coups"):
-                    st.dataframe(pd.DataFrame(recs), use_container_width=True, hide_index=True)
+                    with st.expander(f"Coup {r['move_no']} ({r['san']}) — {r['theme']} (-{r['drop']/100:.2f} pions)"):
+                        st.write(f"🏷️ **Thème identifié :** `{r['theme']}`")
+                        st.write(f"❌ **Ton coup :** **{r['san']}** (Éval : {r['eval_after']})")
+                        st.write(f"💡 **Recommandation Stockfish :** **{r['best']}** (Éval : {r['eval_before']})")
+                        
+                        # Explications personnalisées selon le thème
+                        if "Pièce suspendue" in r['theme']:
+                            st.warning("🧠 **Conseil du Coach :** Vérifie toujours si la case où tu déplaces ta pièce est attaquée et si ton coup laisse une pièce sans défense.")
+                        elif "Tactique" in r['theme']:
+                            st.warning("🧠 **Conseil du Coach :** Prends 5 secondes pour scanner les échecs, prises et menaces directes avant de jouer.")
+                        elif "Sortie de Dame" in r['theme']:
+                            st.warning("🧠 **Conseil du Coach :** Développe d'abord tes Cavaliers et Fous avant de sortir ta Dame.")
+                        else:
+                            st.info("🧠 **Conseil du Coach :** Analyse la réponse adverse la plus forcée sur ce coup.")
         else:
             st.info("Clique sur le bouton ci-dessus pour lancer l'analyse de cette partie.")
 # Progress
@@ -486,11 +539,64 @@ with tabs[4]:
     st.subheader("🎯 Entraînement & Ressources Pédagogiques")
 
     # ------------------------------------
-    # SECTION 1 : EXERCICES DYNAMIQUES
+    # SECTION 1 : BILAN THÉMATIQUE & VIDÉOS DYNAMIQUES
+    # ------------------------------------
+    st.markdown("### 📊 Tes Thèmes de Travail Prioritaires")
+    
+    analyses = st.session_state.get("analyses_map", {})
+    themes_counter = Counter()
+    
+    for recs in analyses.values():
+        if recs:
+            for r in recs:
+                if r["category"] in ["Gaffe", "Erreur"]:
+                    themes_counter[r.get("theme", "Non classé")] += 1
+
+    # Dictionnaire des vidéos adaptées à chaque faiblesse
+    VIDEOS_PAR_THEME = {
+        "Pièce suspendue (non protégée)": [
+            ("🎥 Méthode pour ne plus donner de pièces", "https://www.youtube.com/results?search_query=eviter+les+gaffes+echecs+pieces+pendantes"),
+            ("🎥 Vision tactique et sécurité des pièces", "https://www.youtube.com/results?search_query=vision+tactique+echecs+debutant")
+        ],
+        "Roi exposé / Échec subi": [
+            ("🎥 La sécurité du Roi et le roque", "https://www.youtube.com/results?search_query=securite+du+roi+echecs"),
+            ("🎥 Défendre contre une attaque directe", "https://www.youtube.com/results?search_query=defendre+une+attaque+echecs")
+        ],
+        "Tactique ou capture ratée": [
+            ("🎥 Les motifs tactiques clés (Julien Song)", "https://www.youtube.com/results?search_query=motifs+tactiques+echecs+julien+song"),
+            ("🎥 Comment calculer les coups candidats", "https://www.youtube.com/results?search_query=calculer+les+coups+candidats+echecs")
+        ],
+        "Sortie de Dame précoce / Perte de tempo": [
+            ("🎥 Pourquoi il ne faut pas sortir la Dame trop tôt", "https://www.youtube.com/results?search_query=sortir+la+dame+trop+tot+echecs"),
+            ("🎥 Les grands principes de l'ouverture", "https://www.youtube.com/results?search_query=principes+de+l+ouverture+echecs")
+        ]
+    }
+                    
+    if themes_counter:
+        st.write("Répartition de tes erreurs par thématique :")
+        df_themes = pd.DataFrame(list(themes_counter.items()), columns=["Thème", "Fréquence"]).sort_values("Fréquence", ascending=False)
+        st.dataframe(df_themes, use_container_width=True, hide_index=True)
+        
+        top_theme = df_themes.iloc[0]["Thème"]
+        st.error(f"🎯 **Axe d'entraînement principal :** `{top_theme}` (apparu {df_themes.iloc[0]['Fréquence']} fois).")
+        
+        # Affichage dynamique des cours vidéos selon l'axe principal
+        st.markdown("#### 🎬 Vidéos recommandées pour corriger ce point :")
+        cours_suggeres = VIDEOS_PAR_THEME.get(top_theme, [
+            ("🎥 Travailler sa vision du jeu et sa régularité", "https://www.youtube.com/results?search_query=progression+echecs+conseils")
+        ])
+        for titre, url in cours_suggeres:
+            st.markdown(f"* [{titre}]({url})")
+    else:
+        st.info("Analyse quelques parties dans l'onglet 'Analyse' pour générer ton bilan thématique et tes vidéos sur mesure.")
+
+    st.divider()
+
+    # ------------------------------------
+    # SECTION 2 : EXERCICES DYNAMIQUES
     # ------------------------------------
     st.markdown("### 🧩 Tes Puzzles Personnalisés (issus de tes parties)")
 
-    analyses = st.session_state.get("analyses_map", {})
     puzzles = []
     for idx, recs in analyses.items():
         if recs:
@@ -499,16 +605,14 @@ with tabs[4]:
                     puzzles.append((idx, r))
 
     if not puzzles:
-        st.info(
-            "Analyse quelques parties dans l'onglet 'Analyse' pour générer automatiquement tes exercices personnalisés à partir de tes gaffes !"
-        )
+        st.info("Les moments clés à rejouer s'afficheront ici automatiquement dès qu'une partie sera analysée.")
     else:
-        st.write(f"**{len(puzzles)} moment(s) critique(s)** détecté(s) dans tes analyses :")
+        st.write(f"**{len(puzzles)} moment(s) critique(s)** détecté(s) :")
         
         selected_puzzle_idx = st.selectbox(
             "Choisis un moment à rejouer :",
             range(len(puzzles)),
-            format_func=lambda i: f"Partie {puzzles[i][0]} — Coup {puzzles[i][1]['move_no']} ({puzzles[i][1]['category']} : -{puzzles[i][1]['drop']/100:.2f} pions)"
+            format_func=lambda i: f"Partie {puzzles[i][0]} — Coup {puzzles[i][1]['move_no']} ({puzzles[i][1].get('theme', puzzles[i][1]['category'])} : -{puzzles[i][1]['drop']/100:.2f} pions)"
         )
 
         p_idx, puzzle_data = puzzles[selected_puzzle_idx]
@@ -524,39 +628,9 @@ with tabs[4]:
     st.divider()
 
     # ------------------------------------
-    # SECTION 2 : RECOMMANDATIONS VIDÉO DYNAMIQUES
+    # SECTION 3 : MÉDIATHÈQUE PÉDAGOGIQUE
     # ------------------------------------
-    st.markdown("### 🎬 Vidéos recommandées pour tes axes de progression")
-
-    # Calcul des besoins prioritaires à partir des analyses
-    total_blunders = sum(sum(1 for r in recs if r["category"] == "Gaffe") for recs in analyses.values() if recs)
-    total_errors = sum(sum(1 for r in recs if r["category"] == "Erreur") for recs in analyses.values() if recs)
-
-    if total_blunders > 0:
-        st.warning("🔴 **Axe prioritaire : Réduire les gaffes et vérifier les menaces**")
-        st.markdown("""
-        * 🎥 [Éviter les gaffes aux échecs (Méthode de vérification)](https://www.youtube.com/results?search_query=eviter+les+gaffes+echecs)
-        * 🎥 [La vision tactique et la sécurité du Roi](https://www.youtube.com/results?search_query=vision+tactique+echecs+debutant)
-        """)
-    elif total_errors > 0:
-        st.warning("🟠 **Axe prioritaire : Calcul des coups candidats et prise de décision**")
-        st.markdown("""
-        * 🎥 [Comment calculer les coups candidats](https://www.youtube.com/results?search_query=coups+candidats+echecs)
-        * 🎥 [AMÉLIORER SON CALCUL AUX ÉCHECS](https://www.youtube.com/results?search_query=calcul+de+variantes+echecs)
-        """)
-    else:
-        st.success("🟢 **Axe recommandé : Maîtrise des plans et des finales**")
-        st.markdown("""
-        * 🎥 [Comment élaborer un plan aux échecs](https://www.youtube.com/results?search_query=elaborer+un+plan+aux+echecs)
-        * 🎥 [Les finales de pions fondamentales](https://www.youtube.com/results?search_query=finales+de+pions+echecs+les+bases)
-        """)
-
-    st.divider()
-
-    # ------------------------------------
-    # SECTION 3 : MÉDIATHÈQUE COMPLÈTE & LIENS
-    # ------------------------------------
-    st.markdown("### 📚 Bibliothèque Pédagogique par Thème")
+    st.markdown("### 📚 Bibliothèque Pédagogique Permanente")
 
     cat_tactique, cat_ouvertures, cat_finales, cat_outils = st.tabs([
         "🧩 Tactique & Calcul", 
@@ -569,7 +643,7 @@ with tabs[4]:
         st.markdown("""
         **Vidéos Thématiques :**
         * 🎥 [Julien Song — Les motifs tactiques indispensables](https://www.youtube.com/results?search_query=julien+song+tactique+echecs)
-        * 🎥 [Apprendre les échecs en douceur — Travailler la tactique](https://www.youtube.com/results?search_query=apprendre+les+echecs+en+douceur+tactique)
+        * 🎥 [Éviter les gaffes aux échecs (Méthode de vérification)](https://www.youtube.com/results?search_query=eviter+les+gaffes+echecs)
 
         **Plateformes d'exercices :**
         * 🧩 [Lichess Puzzles](https://lichess.org/training) — Exercices gratuits illimités.
@@ -603,5 +677,95 @@ with tabs[4]:
         **Outils de travail & Chaînes YouTube conseillées :**
         * 🔍 [Lichess Analysis Board](https://lichess.org/analysis) — Échiquier d'analyse gratuit avec Stockfish.
         * 🎥 [Blitzstream (YouTube)](https://www.youtube.com/@Blitzstream) — Analyses pédagogiques et parties commentées.
-        * 🎥 [Capablanca / Chess.com France](https://www.youtube.com/@chesscomfr) — Cours et cours de maîtres en français.
+        * 🎥 [Chess.com France](https://www.youtube.com/@chesscomfr) — Cours et analyses en français.
+        """)
+
+    # ------------------------------------
+    # SECTION 2 : EXERCICES DYNAMIQUES
+    # ------------------------------------
+    st.markdown("### 🧩 Tes Puzzles Personnalisés (issus de tes parties)")
+
+    puzzles = []
+    for idx, recs in analyses.items():
+        if recs:
+            for r in recs:
+                if r["category"] in ["Gaffe", "Erreur"] and r.get("best"):
+                    puzzles.append((idx, r))
+
+    if not puzzles:
+        st.info(
+            "Les moments clés à rejouer s'afficheront ici automatiquement dès qu'une partie sera analysée."
+        )
+    else:
+        st.write(f"**{len(puzzles)} moment(s) critique(s)** détecté(s) :")
+        
+        selected_puzzle_idx = st.selectbox(
+            "Choisis un moment à rejouer :",
+            range(len(puzzles)),
+            format_func=lambda i: f"Partie {puzzles[i][0]} — Coup {puzzles[i][1]['move_no']} ({puzzles[i][1].get('theme', puzzles[i][1]['category'])} : -{puzzles[i][1]['drop']/100:.2f} pions)"
+        )
+
+        p_idx, puzzle_data = puzzles[selected_puzzle_idx]
+
+        st.markdown(f"**Situation (Coup {puzzle_data['move_no']}) :**")
+        st.write(f"Tu as joué : **{puzzle_data['san']}** (Évaluation : {puzzle_data['eval_after']})")
+
+        with st.expander("💡 Révéler la solution de Stockfish", expanded=False):
+            st.success(f"Le meilleur coup recommandé était : **{puzzle_data['best']}**")
+            st.write(f"Évaluation possible : **{puzzle_data['eval_before']}**")
+            st.info("🎯 **Exercice mental :** Visualise l'échiquier et cherche pourquoi ce coup était supérieur.")
+
+    st.divider()
+
+    # ------------------------------------
+    # SECTION 3 : MÉDIATHÈQUE PÉDAGOGIQUE
+    # ------------------------------------
+    st.markdown("### 📚 Bibliothèque Pédagogique par Thème")
+
+    cat_tactique, cat_ouvertures, cat_finales, cat_outils = st.tabs([
+        "🧩 Tactique & Calcul", 
+        "📖 Ouvertures & Stratégie", 
+        "👑 Finales", 
+        "🛠️ Outils & Plateformes"
+    ])
+
+    with cat_tactique:
+        st.markdown("""
+        **Vidéos Thématiques :**
+        * 🎥 [Julien Song — Les motifs tactiques indispensables](https://www.youtube.com/results?search_query=julien+song+tactique+echecs)
+        * 🎥 [Éviter les gaffes aux échecs (Méthode de vérification)](https://www.youtube.com/results?search_query=eviter+les+gaffes+echecs)
+
+        **Plateformes d'exercices :**
+        * 🧩 [Lichess Puzzles](https://lichess.org/training) — Exercices gratuits illimités.
+        * ⚔️ [Lichess Puzzle Racer](https://lichess.org/racer) — Entraînement à la vitesse de calcul.
+        """)
+
+    with cat_ouvertures:
+        st.markdown("""
+        **Vidéos Thématiques :**
+        * 🎥 [Les grands principes de l'ouverture](https://www.youtube.com/results?search_query=principes+des+ouvertures+echecs)
+        * 🎥 [Comment construire un répertoire d'ouvertures solide](https://www.youtube.com/results?search_query=construire+repertoire+ouverture+echecs)
+
+        **Base de données :**
+        * 📚 [Lichess Opening Explorer](https://lichess.org/analysis#explorer) — Statistiques et lignes théoriques.
+        * 📦 [Chessable](https://www.chessable.com) — Apprentissage par répétition espacée.
+        """)
+
+    with cat_finales:
+        st.markdown("""
+        **Vidéos Thématiques :**
+        * 🎥 [Les finales de Tours indispensables](https://www.youtube.com/results?search_query=finales+de+tours+echecs)
+        * 🎥 [La règle de l'opposition dans les finales de pions](https://www.youtube.com/results?search_query=opposition+finales+pions+echecs)
+
+        **Modules interactifs :**
+        * 👑 [Lichess Practice - Finales](https://lichess.org/practice) — Entraînement guidé sur les finales clés.
+        * 🧮 [Syzygy Endgame Tablebases](https://syzygy-tables.info) — Tablebases officielles des finales.
+        """)
+
+    with cat_outils:
+        st.markdown("""
+        **Outils de travail & Chaînes YouTube conseillées :**
+        * 🔍 [Lichess Analysis Board](https://lichess.org/analysis) — Échiquier d'analyse gratuit avec Stockfish.
+        * 🎥 [Blitzstream (YouTube)](https://www.youtube.com/@Blitzstream) — Analyses pédagogiques et parties commentées.
+        * 🎥 [Chess.com France](https://www.youtube.com/@chesscomfr) — Cours et analyses en français.
         """)
