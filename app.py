@@ -13,6 +13,36 @@ import requests
 import streamlit as st
 import pandas as pd
 
+def generate_gemini_prompt(game):
+    """Génère un texte formaté pour l'analyse avec Gemini."""
+    # Ces clés doivent correspondre exactement à celles de ton dictionnaire 'game'
+    blunders = game.get('blunders', 'Aucune') 
+    mistakes = game.get('mistakes', 'Aucune')
+    pgn = game.get('pgn', 'Pas de PGN disponible')
+    
+    prompt = f"""
+Voici ma partie d'échecs pour une analyse pédagogique :
+
+--- INFOS PARTIE ---
+- Blancs : {game.get('white', 'Inconnu')}
+- Noirs : {game.get('black', 'Inconnu')}
+- Résultat : {game.get('result', 'Inconnu')}
+- Ouverture : {game.get('opening', 'Inconnu')}
+
+--- ANALYSE STOCKFISH ---
+- Gaffes (Blunders) : {blunders}
+- Erreurs (Mistakes) : {mistakes}
+
+--- PGN ---
+{pgn}
+
+--- TA MISSION ---
+Peux-tu analyser cette partie ? Concentre-toi sur les moments clés (les gaffes/erreurs). 
+Explique-moi le "pourquoi" stratégique derrière les coups tactiques manqués. 
+Aide-moi à comprendre ma faille principale dans cette partie.
+    """
+    return prompt
+
 def extraire_stats_ouvertures(parties_pgn, pseudo):
     """
     Parcourt une liste d'objets chess.pgn.Game et extrait les statistiques
