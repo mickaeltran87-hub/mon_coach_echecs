@@ -562,7 +562,7 @@ Explique-moi le "pourquoi" stratégique et aide-moi à progresser.
     """
     return prompt
 
-        if recs is not None:
+if recs is not None:
             if len(recs) == 0:
                 st.warning("Aucun coup n'a pu être analysé. Vérifie que le pseudo dans la barre latérale correspond à l'un des deux joueurs.")
             else:
