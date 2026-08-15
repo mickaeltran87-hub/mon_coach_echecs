@@ -271,7 +271,6 @@ def analyze_game(game, username, engine, depth=12, max_plies=160):
     if engine is None:
         return []
 
-    # Vérification insensible à la casse de la couleur
     white = game.headers.get("White", "").strip().lower()
     black = game.headers.get("Black", "").strip().lower()
     user = username.strip().lower()
@@ -281,7 +280,6 @@ def analyze_game(game, username, engine, depth=12, max_plies=160):
     elif user in black:
         u_color = chess.BLACK
     else:
-        # Par défaut, si non trouvé, on analyse les Blancs
         u_color = chess.WHITE
 
     board = game.board()
@@ -295,7 +293,6 @@ def analyze_game(game, username, engine, depth=12, max_plies=160):
         before = board.copy()
         san = board.san(move)
 
-        # Calcul coup avant
         try:
             info_before = engine.analyse(before, chess.engine.Limit(depth=depth))
             pv_before = info_before.get("pv", [])
@@ -307,25 +304,37 @@ def analyze_game(game, username, engine, depth=12, max_plies=160):
 
         board.push(move)
 
-        # Calcul coup après
-        try:
-            info_after = engine.analyse(board, chess.engine.Limit(depth=depth))
-            eval_after = score_cp(info_after["score"], u_color)
-        except Exception:
-            eval_after = eval_before
+        # Ne jamais interroger le moteur sur une position déjà terminée (mat/pat) :
+        # Stockfish renvoie "mate 0", ambigu en signe, ce qui inverse le résultat.
+        if board.is_checkmate():
+            # board.turn = le camp qui vient d'être maté. S'il ne s'agit pas de u_color,
+            # c'est u_color qui vient de délivrer l'échec et mat : le meilleur résultat possible.
+            eval_after = -100000 if board.turn == u_color else 100000
+        elif board.is_stalemate() or board.is_insufficient_material():
+            eval_after = 0
+        else:
+            try:
+                info_after = engine.analyse(board, chess.engine.Limit(depth=depth))
+                eval_after = score_cp(info_after["score"], u_color)
+            except Exception:
+                eval_after = eval_before
 
-       # Enregistrement des coups du joueur
         if mover == u_color:
-            drop = max(0, eval_before - eval_after)
-            theme = identifier_theme_coup(before, move, drop)
-            
+            if board.is_checkmate() and board.turn != u_color:
+                # Le coup qu'on vient d'analyser a livré le mat : rien à reprocher.
+                drop, theme, category = 0.0, "Mat délivré", "OK"
+            else:
+                drop = max(0, eval_before - eval_after)
+                theme = identifier_theme_coup(before, move, drop)
+                category = classify_drop(drop)
+
             records.append({
                 "ply": ply + 1,
                 "move_no": ply // 2 + 1,
                 "san": san,
                 "drop": round(drop, 1),
-                "category": classify_drop(drop),
-                "theme": theme,  # <-- NOUVEAU CHAMP THÉMATIQUE
+                "category": category,
+                "theme": theme,
                 "best": before.san(best_move) if best_move else "",
                 "eval_before": round(eval_before / 100, 2),
                 "eval_after": round(eval_after / 100, 2),
