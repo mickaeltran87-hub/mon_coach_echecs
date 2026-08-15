@@ -533,7 +533,7 @@ with tabs[2]:
         analyses_map = st.session_state.get("analyses_map", {})
         recs = analyses_map.get(selected)
 
- def generate_gemini_prompt(game, analysis_recs=None):
+def generate_gemini_prompt(game, analysis_recs=None):
     """Génère un texte formaté pour l'analyse avec Gemini."""
     white = game.headers.get('White', 'Inconnu')
     black = game.headers.get('Black', 'Inconnu')
