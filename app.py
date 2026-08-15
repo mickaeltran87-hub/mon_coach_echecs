@@ -533,6 +533,35 @@ with tabs[2]:
         analyses_map = st.session_state.get("analyses_map", {})
         recs = analyses_map.get(selected)
 
+        def generate_gemini_prompt(game, analysis_recs=None):
+    """Génère un texte formaté pour l'analyse avec Gemini."""
+    white = game.headers.get('White', 'Inconnu')
+    black = game.headers.get('Black', 'Inconnu')
+    date = game.headers.get('Date', 'Inconnu')
+    
+    # Récupération du PGN de la partie
+    pgn_str = str(game)
+    
+    prompt = f"""
+Voici ma partie d'échecs pour une analyse pédagogique :
+
+--- INFOS PARTIE ---
+- Date : {date}
+- Blancs : {white}
+- Noirs : {black}
+
+--- RAPPORT STOCKFISH ---
+{analysis_recs if analysis_recs else "Aucune analyse Stockfish détaillée pour le moment."}
+
+--- PGN ---
+{pgn_str}
+
+--- TA MISSION ---
+Peux-tu analyser cette partie ? Concentre-toi sur les moments clés et les erreurs. 
+Explique-moi le "pourquoi" stratégique et aide-moi à progresser.
+    """
+    return prompt
+
         if recs is not None:
             if len(recs) == 0:
                 st.warning("Aucun coup n'a pu être analysé. Vérifie que le pseudo dans la barre latérale correspond à l'un des deux joueurs.")
