@@ -388,12 +388,12 @@ with tabs[2]:
             if engine is None:
                 st.error("Stockfish est nécessaire pour cette fonction.")
             else:
-                with st.spinner("Analyse en cours…"):
+                with st.spinner("Analyse approfondie en cours…"):
                     result = analyze_game(games[selected], username, engine, depth=depth)
                     st.session_state["curr_analysis"] = result
                     st.session_state.setdefault("analyses", {})[selected] = result
-                    st.success("Analyse terminée.")
 
+        # On récupère l'analyse en priorité depuis la session courante ou le cache global
         recs = st.session_state.get("curr_analysis")
         if not recs:
             recs = st.session_state.get("analyses", {}).get(selected)
@@ -414,7 +414,6 @@ with tabs[2]:
                 st.dataframe(pd.DataFrame(recs), use_container_width=True, hide_index=True)
         else:
             st.info("Clique sur le bouton ci-dessus pour lancer l'analyse de cette partie.")
-
 # Progress
 with tabs[3]:
     st.subheader("📈 Progression")
