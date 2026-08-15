@@ -425,7 +425,7 @@ if engine is None:
         "mais l'analyse précise des coups nécessite Stockfish. Voir README.md."
     )
 
-tabs = st.tabs(["🏠 Tableau de bord", "♟️ Mes parties", "🔎 Analyse", "📈 Progression", "🎯 Entraînement"])
+tabs = st.tabs(["🏠 Tableau de bord", "♟️ Mes parties", "🔎 Analyse", "📈 Progression", "📊 Statistiques", "🎯 Entraînement"])
 
 # Dashboard
 with tabs[0]:
