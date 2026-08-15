@@ -62,9 +62,13 @@ def result_for_user(game, username):
     return result
 
 def user_color(game, username):
-    if game.headers.get("White", "").lower() == username.lower():
+    white = game.headers.get("White", "").strip().lower()
+    black = game.headers.get("Black", "").strip().lower()
+    user = username.strip().lower()
+    
+    if user in white:
         return chess.WHITE
-    if game.headers.get("Black", "").lower() == username.lower():
+    if user in black:
         return chess.BLACK
     return None
 
