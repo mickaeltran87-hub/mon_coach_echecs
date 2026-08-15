@@ -652,9 +652,11 @@ with tabs[4]:
 
     with cat_ouvertures:
         st.markdown("""
-        **Vidéos Thématiques :**
+        **Vidéos Thématiques & Ton Répertoire :**
         * 🎥 [Les grands principes de l'ouverture](https://www.youtube.com/results?search_query=principes+des+ouvertures+echecs)
-        * 🎥 [Comment construire un répertoire d'ouvertures solide](https://www.youtube.com/results?search_query=construire+repertoire+ouverture+echecs)
+        * ⚪ [Maîtriser l'Ouverture Catalane](https://www.youtube.com/results?search_query=ouverture+catalane+echecs)
+        * ⚫ [La Défense Française : Focus Variante d'Avance](https://www.youtube.com/results?search_query=defense+francaise+variante+avance+echecs)
+        * ⚫ [Comprendre la Défense Slave](https://www.youtube.com/results?search_query=defense+slave+echecs)
 
         **Base de données :**
         * 📚 [Lichess Opening Explorer](https://lichess.org/analysis#explorer) — Statistiques et lignes théoriques.
@@ -680,92 +682,4 @@ with tabs[4]:
         * 🎥 [Chess.com France](https://www.youtube.com/@chesscomfr) — Cours et analyses en français.
         """)
 
-    # ------------------------------------
-    # SECTION 2 : EXERCICES DYNAMIQUES
-    # ------------------------------------
-    st.markdown("### 🧩 Tes Puzzles Personnalisés (issus de tes parties)")
-
-    puzzles = []
-    for idx, recs in analyses.items():
-        if recs:
-            for r in recs:
-                if r["category"] in ["Gaffe", "Erreur"] and r.get("best"):
-                    puzzles.append((idx, r))
-
-    if not puzzles:
-        st.info(
-            "Les moments clés à rejouer s'afficheront ici automatiquement dès qu'une partie sera analysée."
-        )
-    else:
-        st.write(f"**{len(puzzles)} moment(s) critique(s)** détecté(s) :")
-        
-        selected_puzzle_idx = st.selectbox(
-            "Choisis un moment à rejouer :",
-            range(len(puzzles)),
-            format_func=lambda i: f"Partie {puzzles[i][0]} — Coup {puzzles[i][1]['move_no']} ({puzzles[i][1].get('theme', puzzles[i][1]['category'])} : -{puzzles[i][1]['drop']/100:.2f} pions)"
-        )
-
-        p_idx, puzzle_data = puzzles[selected_puzzle_idx]
-
-        st.markdown(f"**Situation (Coup {puzzle_data['move_no']}) :**")
-        st.write(f"Tu as joué : **{puzzle_data['san']}** (Évaluation : {puzzle_data['eval_after']})")
-
-        with st.expander("💡 Révéler la solution de Stockfish", expanded=False):
-            st.success(f"Le meilleur coup recommandé était : **{puzzle_data['best']}**")
-            st.write(f"Évaluation possible : **{puzzle_data['eval_before']}**")
-            st.info("🎯 **Exercice mental :** Visualise l'échiquier et cherche pourquoi ce coup était supérieur.")
-
-    st.divider()
-
-    # ------------------------------------
-    # SECTION 3 : MÉDIATHÈQUE PÉDAGOGIQUE
-    # ------------------------------------
-    st.markdown("### 📚 Bibliothèque Pédagogique par Thème")
-
-    cat_tactique, cat_ouvertures, cat_finales, cat_outils = st.tabs([
-        "🧩 Tactique & Calcul", 
-        "📖 Ouvertures & Stratégie", 
-        "👑 Finales", 
-        "🛠️ Outils & Plateformes"
-    ])
-
-    with cat_tactique:
-        st.markdown("""
-        **Vidéos Thématiques :**
-        * 🎥 [Julien Song — Les motifs tactiques indispensables](https://www.youtube.com/results?search_query=julien+song+tactique+echecs)
-        * 🎥 [Éviter les gaffes aux échecs (Méthode de vérification)](https://www.youtube.com/results?search_query=eviter+les+gaffes+echecs)
-
-        **Plateformes d'exercices :**
-        * 🧩 [Lichess Puzzles](https://lichess.org/training) — Exercices gratuits illimités.
-        * ⚔️ [Lichess Puzzle Racer](https://lichess.org/racer) — Entraînement à la vitesse de calcul.
-        """)
-
-    with cat_ouvertures:
-        st.markdown("""
-        **Vidéos Thématiques :**
-        * 🎥 [Les grands principes de l'ouverture](https://www.youtube.com/results?search_query=principes+des+ouvertures+echecs)
-        * 🎥 [Comment construire un répertoire d'ouvertures solide](https://www.youtube.com/results?search_query=construire+repertoire+ouverture+echecs)
-
-        **Base de données :**
-        * 📚 [Lichess Opening Explorer](https://lichess.org/analysis#explorer) — Statistiques et lignes théoriques.
-        * 📦 [Chessable](https://www.chessable.com) — Apprentissage par répétition espacée.
-        """)
-
-    with cat_finales:
-        st.markdown("""
-        **Vidéos Thématiques :**
-        * 🎥 [Les finales de Tours indispensables](https://www.youtube.com/results?search_query=finales+de+tours+echecs)
-        * 🎥 [La règle de l'opposition dans les finales de pions](https://www.youtube.com/results?search_query=opposition+finales+pions+echecs)
-
-        **Modules interactifs :**
-        * 👑 [Lichess Practice - Finales](https://lichess.org/practice) — Entraînement guidé sur les finales clés.
-        * 🧮 [Syzygy Endgame Tablebases](https://syzygy-tables.info) — Tablebases officielles des finales.
-        """)
-
-    with cat_outils:
-        st.markdown("""
-        **Outils de travail & Chaînes YouTube conseillées :**
-        * 🔍 [Lichess Analysis Board](https://lichess.org/analysis) — Échiquier d'analyse gratuit avec Stockfish.
-        * 🎥 [Blitzstream (YouTube)](https://www.youtube.com/@Blitzstream) — Analyses pédagogiques et parties commentées.
-        * 🎥 [Chess.com France](https://www.youtube.com/@chesscomfr) — Cours et analyses en français.
-        """)
+   
