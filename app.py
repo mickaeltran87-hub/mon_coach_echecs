@@ -225,7 +225,32 @@ def calculer_note_partie(recs):
     total_drop = sum(r['drop'] for r in recs)
     return round(max(0, 10 - (total_drop / 300)), 1)
 
+def identifier_theme_coup(before_board, move, drop):
+    if drop < 50:
+        return "Coup solide"
 
+    piece_moved = before_board.piece_at(move.from_square)
+    after_board = before_board.copy()
+    after_board.push(move)
+
+    if not before_board.is_capture(move):
+        to_square = move.to_square
+        if after_board.is_attacked_by(not before_board.turn, to_square) and not after_board.is_attacked_by(before_board.turn, to_square):
+            return "Pièce suspendue (non protégée)"
+
+    captures_visibles = list(before_board.generate_legal_captures())
+    if captures_visibles and not before_board.is_capture(move):
+        return "Tactique ou capture ratée"
+
+    if piece_moved and piece_moved.piece_type == chess.QUEEN and before_board.fullmove_number <= 10:
+        return "Sortie de Dame précoce / Perte de tempo"
+
+    if drop >= 250:
+        return "Gaffe tactique majeure"
+    elif drop >= 100:
+        return "Erreur de calcul / Structure"
+
+    return "Imprécision positionnelle"
 
 def analyze_game(game, username, engine, depth=12, max_plies=160):
     if engine is None:
@@ -502,16 +527,16 @@ with tabs[2]:
         analyses_map = st.session_state.get("analyses_map", {})
         recs = analyses_map.get(selected)
 
-def generate_gemini_prompt(game, analysis_recs=None):
-    """Génère un texte formaté pour l'analyse avec Gemini."""
-    white = game.headers.get('White', 'Inconnu')
-    black = game.headers.get('Black', 'Inconnu')
-    date = game.headers.get('Date', 'Inconnu')
+        def generate_gemini_prompt(game, analysis_recs=None):
+            """Génère un texte formaté pour l'analyse avec Gemini."""
+            white = game.headers.get('White', 'Inconnu')
+            black = game.headers.get('Black', 'Inconnu')
+            date = game.headers.get('Date', 'Inconnu')
     
     # Récupération du PGN de la partie
-    pgn_str = str(game)
+            pgn_str = str(game)
     
-    prompt = f"""
+            prompt = f"""
 Voici ma partie d'échecs pour une analyse pédagogique :
 
 --- INFOS PARTIE ---
