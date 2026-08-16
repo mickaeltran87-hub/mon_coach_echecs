@@ -525,6 +525,7 @@ with tabs[2]:
                     st.session_state["analyses_map"][selected] = res
 
         analyses_map = st.session_state.get("analyses_map", {})
+analyses_map = st.session_state.get("analyses_map", {})
         recs = analyses_map.get(selected)
 
         def generate_gemini_prompt(game, analysis_recs=None):
@@ -532,55 +533,53 @@ with tabs[2]:
             white = game.headers.get('White', 'Inconnu')
             black = game.headers.get('Black', 'Inconnu')
             date = game.headers.get('Date', 'Inconnu')
-    
-    # Récupération du PGN de la partie
             pgn_str = str(game)
-    
-            prompt = f"""
-Voici ma partie d'échecs pour une analyse pédagogique :
+            rapport = analysis_recs if analysis_recs else "Aucune analyse Stockfish détaillée pour le moment."
 
---- INFOS PARTIE ---
-- Date : {date}
-- Blancs : {white}
-- Noirs : {black}
+            lignes = []
+            lignes.append("Voici ma partie d'échecs pour une analyse pédagogique :")
+            lignes.append("")
+            lignes.append("--- INFOS PARTIE ---")
+            lignes.append(f"- Date : {date}")
+            lignes.append(f"- Blancs : {white}")
+            lignes.append(f"- Noirs : {black}")
+            lignes.append("")
+            lignes.append("--- RAPPORT STOCKFISH ---")
+            lignes.append(str(rapport))
+            lignes.append("")
+            lignes.append("--- PGN ---")
+            lignes.append(pgn_str)
+            lignes.append("")
+            lignes.append("--- TA MISSION ---")
+            lignes.append("Peux-tu analyser cette partie ? Concentre-toi sur les moments clés et les erreurs.")
+            lignes.append("Explique-moi le \"pourquoi\" stratégique et aide-moi à progresser.")
 
---- RAPPORT STOCKFISH ---
-{analysis_recs if analysis_recs else "Aucune analyse Stockfish détaillée pour le moment."}
+            return "\n".join(lignes)
 
---- PGN ---
-{pgn_str}
+        if recs is not None:
+            if len(recs) == 0:
+                st.warning("Aucun coup n'a pu être analysé. Vérifie que le pseudo dans la barre latérale correspond à l'un des deux joueurs.")
+            else:
+                st.markdown("### 📊 Fiche de performance")
+                note = calculer_note_partie(recs)
+                st.metric("Note du Coach", f"{note}/10")
 
---- TA MISSION ---
-Peux-tu analyser cette partie ? Concentre-toi sur les moments clés et les erreurs. 
-Explique-moi le "pourquoi" stratégique et aide-moi à progresser.
-    """
-    return prompt
+                erreurs = [r for r in recs if r['drop'] >= 0]
+                severe = sorted(erreurs, key=lambda x: x['drop'], reverse=True)[:3]
 
-if recs is not None:
-        if len(recs) == 0:
-            st.warning("Aucun coup n'a pu être analysé. Vérifie que le pseudo dans la barre latérale correspond à l'un des deux joueurs.")
-        else:
-            st.markdown("### 📊 Fiche de performance")
-            note = calculer_note_partie(recs)
-            st.metric("Note du Coach", f"{note}/10")
+                st.markdown("### 🔴 Les 3 moments décisifs (Analyse Pédagogique)")
+                for r in severe:
+                    with st.expander(f"Coup {r['move_no']} ({r['san']}) – ({r['theme']} (-{r['drop']/100:.2f} pions)"):
+                        st.write(f"✏️ **Thème identifié :** `{r['theme']}`")
+                        st.write(f"❌ **Ton coup :** **{r['san']}** (Éval : {r['eval_after']})")
+                        st.write(f"💡 **Recommandation Stockfish :** **{r['best']}** (Éval : {r['eval_before']})")
 
-            # Sélection des pires coups (drop > 0)
-            erreurs = [r for r in recs if r['drop'] >= 0]
-            severe = sorted(erreurs, key=lambda x: x['drop'], reverse=True)[:3]
-
-            st.markdown("### 🔴 Les 3 moments décisifs (Analyse Pédagogique)")
-            for r in severe:
-                with st.expander(f"Coup {r['move_no']} ({r['san']}) – ({r['theme']} (-{r['drop']/100:.2f} pions)"):
-                    st.write(f"✏️ **Thème identifié :** `{r['theme']}`")
-                    st.write(f"❌ **Ton coup :** **{r['san']}** (Éval : {r['eval_after']})")
-                    st.write(f"💡 **Recommandation Stockfish :** **{r['best']}** (Éval : {r['eval_before']})")
-        
-        st.divider()
-        if st.button("📋 Copier pour Analyse Gemini", key="btn_gemini_analyse"):
-            current_game = games[selected]
-            prompt = generate_gemini_prompt(current_game, recs)
-            st.info("Copie le texte ci-dessous et colle-le dans notre discussion !")
-            st.text_area("Texte à copier", value=prompt, height=200)
+            st.divider()
+            if st.button("📋 Copier pour Analyse Gemini", key="btn_gemini_analyse"):
+                current_game = games[selected]
+                prompt = generate_gemini_prompt(current_game, recs)
+                st.info("Copie le texte ci-dessous et colle-le dans notre discussion !")
+                st.text_area("Texte à copier", value=prompt, height=200)
             
 # Progress
 with tabs[3]:
