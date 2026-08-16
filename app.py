@@ -208,7 +208,11 @@ def score_cp(score, pov):
     s = score.pov(pov)
     if s.is_mate():
         mate = s.mate()
-        return 100000 if mate and mate > 0 else -100000
+        if mate == 0:
+            # Position déjà terminée (mat consommé) : traité explicitement ailleurs,
+            # on renvoie une valeur neutre plutôt que de mal interpréter ce zéro ambigu.
+            return 0
+        return 100000 if mate > 0 else -100000
     return s.score(mate_score=100000)
 
 def classify_drop(drop):
@@ -225,7 +229,12 @@ def calculer_note_partie(recs):
     total_drop = sum(r['drop'] for r in recs)
     return round(max(0, 10 - (total_drop / 300)), 1)
 
+
 def identifier_theme_coup(before_board, move, drop):
+    """
+    Identifie le thème tactique ou stratégique du coup joué
+    en analysant l'état de l'échiquier avant et après le coup.
+    """
     if drop < 50:
         return "Coup solide"
 
@@ -233,18 +242,22 @@ def identifier_theme_coup(before_board, move, drop):
     after_board = before_board.copy()
     after_board.push(move)
 
+    # 1. Pièce pendante / non protégée laissée en prise
     if not before_board.is_capture(move):
         to_square = move.to_square
         if after_board.is_attacked_by(not before_board.turn, to_square) and not after_board.is_attacked_by(before_board.turn, to_square):
             return "Pièce suspendue (non protégée)"
 
+    # 2. Raté d'une capture ou d'un gain de pièce (si la case d'arrivée n'est pas une capture)
     captures_visibles = list(before_board.generate_legal_captures())
     if captures_visibles and not before_board.is_capture(move):
         return "Tactique ou capture ratée"
 
+    # 3. Développement précoce de la Dame / Perte de tempo
     if piece_moved and piece_moved.piece_type == chess.QUEEN and before_board.fullmove_number <= 10:
         return "Sortie de Dame précoce / Perte de tempo"
 
+    # 4. Défense passive ou manque de contrôle du centre
     if drop >= 250:
         return "Gaffe tactique majeure"
     elif drop >= 100:
@@ -252,10 +265,12 @@ def identifier_theme_coup(before_board, move, drop):
 
     return "Imprécision positionnelle"
 
+
 def analyze_game(game, username, engine, depth=12, max_plies=160):
     if engine is None:
         return []
 
+    # Vérification insensible à la casse de la couleur
     white = game.headers.get("White", "").strip().lower()
     black = game.headers.get("Black", "").strip().lower()
     user = username.strip().lower()
@@ -265,6 +280,7 @@ def analyze_game(game, username, engine, depth=12, max_plies=160):
     elif user in black:
         u_color = chess.BLACK
     else:
+        # Par défaut, si non trouvé, on analyse les Blancs
         u_color = chess.WHITE
 
     board = game.board()
@@ -278,6 +294,7 @@ def analyze_game(game, username, engine, depth=12, max_plies=160):
         before = board.copy()
         san = board.san(move)
 
+        # Calcul coup avant
         try:
             info_before = engine.analyse(before, chess.engine.Limit(depth=depth))
             pv_before = info_before.get("pv", [])
@@ -290,7 +307,7 @@ def analyze_game(game, username, engine, depth=12, max_plies=160):
         board.push(move)
 
         # Ne jamais interroger le moteur sur une position déjà terminée (mat/pat) :
-        # Stockfish renvoie "mate 0", ambigu en signe, ce qui inverse le résultat.
+        # Stockfish renvoie "mate 0", ambigu en signe, ce qui inverserait le résultat.
         if board.is_checkmate():
             # board.turn = le camp qui vient d'être maté. S'il ne s'agit pas de u_color,
             # c'est u_color qui vient de délivrer l'échec et mat : le meilleur résultat possible.
@@ -304,6 +321,7 @@ def analyze_game(game, username, engine, depth=12, max_plies=160):
             except Exception:
                 eval_after = eval_before
 
+        # Enregistrement des coups du joueur
         if mover == u_color:
             if board.is_checkmate() and board.turn != u_color:
                 # Le coup qu'on vient d'analyser a livré le mat : rien à reprocher.
@@ -527,7 +545,7 @@ with tabs[2]:
         analyses_map = st.session_state.get("analyses_map", {})
         recs = analyses_map.get(selected)
 
-        def generate_gemini_prompt(game, analysis_recs=None):
+        def generate_gemini_prompt_partie(game, analysis_recs=None):
             """Génère un texte formaté pour l'analyse avec Gemini."""
             white = game.headers.get('White', 'Inconnu')
             black = game.headers.get('Black', 'Inconnu')
@@ -576,10 +594,10 @@ with tabs[2]:
             st.divider()
             if st.button("📋 Copier pour Analyse Gemini", key="btn_gemini_analyse"):
                 current_game = games[selected]
-                prompt = generate_gemini_prompt(current_game, recs)
+                prompt = generate_gemini_prompt_partie(current_game, recs)
                 st.info("Copie le texte ci-dessous et colle-le dans notre discussion !")
                 st.text_area("Texte à copier", value=prompt, height=200)
-            
+
 # Progress
 with tabs[3]:
     st.subheader("📈 Progression")
@@ -817,5 +835,3 @@ with tabs[5]:
         * 🎥 [Blitzstream (YouTube)](https://www.youtube.com/@Blitzstream) — Analyses pédagogiques et parties commentées.
         * 🎥 [Chess.com France](https://www.youtube.com/@chesscomfr) — Cours et analyses en français.
         """)
-
-   
