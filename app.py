@@ -525,7 +525,6 @@ with tabs[2]:
                     st.session_state["analyses_map"][selected] = res
 
         analyses_map = st.session_state.get("analyses_map", {})
-analyses_map = st.session_state.get("analyses_map", {})
         recs = analyses_map.get(selected)
 
         def generate_gemini_prompt(game, analysis_recs=None):
