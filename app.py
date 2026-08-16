@@ -326,6 +326,9 @@ def analyze_game(game, username, engine, depth=12, max_plies=160):
             if board.is_checkmate() and board.turn != u_color:
                 # Le coup qu'on vient d'analyser a livré le mat : rien à reprocher.
                 drop, theme, category = 0.0, "Mat délivré", "OK"
+            elif eval_before >= 10000:
+                # Si Stockfish voyait déjà un mat avant le coup, ce n'est pas une gaffe
+                drop, theme, category = 0.0, "Coup gagnant / Attaque décisive", "OK"
             else:
                 drop = max(0, eval_before - eval_after)
                 theme = identifier_theme_coup(before, move, drop)
