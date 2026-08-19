@@ -1,9 +1,27 @@
 # -*- coding: utf-8 -*-
 """
-Mon Coach d'Échecs — v3
+Mon Coach d'Échecs — v4
 ------------------------
-Dépendances : streamlit, python-chess (chess), pandas, requests
-    pip install streamlit chess pandas requests
+Dépendances : streamlit, python-chess (chess), pandas, requests, sqlalchemy
+    pip install streamlit chess pandas requests sqlalchemy
+Pour un déploiement sur Streamlit Community Cloud avec base Postgres, ajoute
+aussi le driver : pip install "psycopg2-binary" (voir requirements.txt fourni).
+
+Nouveautés v4 — persistance qui survit à la mise en veille Streamlit Cloud :
+- PROBLÈME RÉSOLU : Streamlit Community Cloud ne garantit PAS la conservation
+  des fichiers locaux (l'app peut les perdre à la mise en veille après 12h
+  d'inactivité, à chaque redéploiement, ou à un reboot manuel). Un fichier
+  SQLite local — comme dans les versions précédentes — ne survit donc pas de
+  façon fiable à ces événements : c'est ce qui faisait retomber le compteur
+  d'analyses à 0.
+- La couche base de données passe par st.connection("sql") (SQLAlchemy) :
+  * Si un secret [connections.sql] url=... est configuré (base Postgres
+    hébergée, ex: Neon ou Supabase, gratuites), l'historique y est stocké et
+    survit aux mises en veille et redéploiements.
+  * Sinon (ex : en local sur ta machine), l'app retombe automatiquement sur
+    un fichier SQLite local — rien à configurer pour le développement local.
+- Voir le fichier migrate_to_postgres.py fourni séparément pour copier un
+  historique SQLite local existant vers la nouvelle base Postgres.
 
 Nouveautés v3 :
 - Les recommandations (vidéos YouTube + thème prioritaire) ne sont plus basées
@@ -52,7 +70,6 @@ script n'est pas un service qui tourne en arrière-plan).
 import io
 import json
 import re
-import sqlite3
 from collections import Counter
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -65,10 +82,10 @@ import pandas as pd
 import requests
 import streamlit as st
 import streamlit.components.v1 as st_components
+from sqlalchemy import text
 
 APP_TITLE = "♟️ Mon Coach d'Échecs"
 CHESS_API = "https://api.chess.com/pub"
-DB_PATH = Path(__file__).resolve().parent / "coach_echecs_history.db"
 CLK_RE = re.compile(r"\[%clk\s+([0-9:.]+)\]")
 
 st.set_page_config(page_title=APP_TITLE, page_icon="♟️", layout="wide")
@@ -76,17 +93,70 @@ st.set_page_config(page_title=APP_TITLE, page_icon="♟️", layout="wide")
 # ==========================================================
 # Base de données (historique persistant long terme)
 # ==========================================================
+#
+# IMPORTANT — hébergement sur Streamlit Community Cloud :
+# le stockage de fichiers locaux n'y est PAS garanti (l'app peut perdre ses
+# fichiers locaux à tout moment : mise en veille après 12h d'inactivité,
+# redéploiement après un push, reboot manuel...). Un fichier SQLite local
+# ne survit donc pas de façon fiable à ces événements.
+#
+# Pour y remédier, l'app utilise st.connection("sql") (SQLAlchemy) :
+# - Si un secret [connections.sql] url=... est configuré (ex: une base
+#   Postgres gratuite chez Neon ou Supabase), l'historique y est stocké et
+#   survit aux mises en veille/redéploiements.
+# - Sinon (ex: en local sur ta machine), l'app retombe automatiquement sur
+#   un fichier SQLite local, sans rien à configurer.
 
 @st.cache_resource
 def get_db_connection():
-    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL;")
-    return conn
+    try:
+        has_secret = "connections" in st.secrets and "sql" in st.secrets["connections"]
+    except Exception:
+        has_secret = False
+
+    if has_secret:
+        return st.connection("sql")
+
+    db_path = Path(__file__).resolve().parent / "coach_echecs_history.db"
+    return st.connection("sql", url=f"sqlite:///{db_path}")
+
+
+def db_execute(sql, params=None):
+    """Exécute une requête d'écriture (INSERT/UPDATE/DELETE/CREATE) et commit."""
+    conn = get_db_connection()
+    with conn.session as s:
+        s.execute(text(sql), params or {})
+        s.commit()
+
+
+def db_fetchall(sql, params=None):
+    """Exécute une requête de lecture et renvoie une liste de lignes
+    (compatibles avec l'unpacking en tuple et l'accès par index)."""
+    conn = get_db_connection()
+    with conn.session as s:
+        result = s.execute(text(sql), params or {})
+        return result.fetchall()
+
+
+def db_fetchone(sql, params=None):
+    rows = db_fetchall(sql, params)
+    return rows[0] if rows else None
+
+
+def db_query_df(sql, params=None):
+    """Lecture -> DataFrame directement, toujours fraîche (pas de cache)."""
+    conn = get_db_connection()
+    return conn.query(sql, params=params or {}, ttl=0)
 
 
 def init_db():
-    conn = get_db_connection()
-    conn.execute("""
+    try:
+        if get_db_connection().engine.dialect.name == "sqlite":
+            db_execute("PRAGMA journal_mode=WAL")
+    except Exception:
+        pass
+
+    db_execute("""
         CREATE TABLE IF NOT EXISTS games (
             game_id TEXT NOT NULL,
             username TEXT NOT NULL,
@@ -106,7 +176,7 @@ def init_db():
             PRIMARY KEY (game_id, username)
         )
     """)
-    conn.execute("""
+    db_execute("""
         CREATE TABLE IF NOT EXISTS analyses (
             game_id TEXT NOT NULL,
             username TEXT NOT NULL,
@@ -123,7 +193,7 @@ def init_db():
             PRIMARY KEY (game_id, username)
         )
     """)
-    conn.execute("""
+    db_execute("""
         CREATE TABLE IF NOT EXISTS puzzle_reviews (
             username TEXT NOT NULL,
             game_id TEXT NOT NULL,
@@ -136,39 +206,38 @@ def init_db():
             PRIMARY KEY (username, game_id, ply)
         )
     """)
-    conn.commit()
 
 
 def upsert_game(username, game_id, meta, game):
     if not game_id:
         return
-    conn = get_db_connection()
-    conn.execute("""
+    db_execute("""
         INSERT INTO games (game_id, username, end_time, date, white, black, result,
                             user_color, user_rating, opp_rating, eco, opening,
                             time_control, pgn, first_seen_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(game_id, username) DO UPDATE SET
-            end_time=excluded.end_time,
-            date=excluded.date,
-            result=excluded.result,
-            user_rating=excluded.user_rating,
-            opp_rating=excluded.opp_rating
-    """, (
-        game_id, username, meta.get("end_time"), game.headers.get("Date", ""),
-        game.headers.get("White", ""), game.headers.get("Black", ""),
-        result_for_user(game, username), meta.get("user_color", ""),
-        meta.get("user_rating"), meta.get("opp_rating"),
-        game.headers.get("ECO", ""), eco_name(game), game.headers.get("TimeControl", ""),
-        str(game), datetime.now(timezone.utc).isoformat(),
-    ))
-    conn.commit()
+        VALUES (:game_id, :username, :end_time, :date, :white, :black, :result,
+                :user_color, :user_rating, :opp_rating, :eco, :opening,
+                :time_control, :pgn, :first_seen_at)
+        ON CONFLICT (game_id, username) DO UPDATE SET
+            end_time = excluded.end_time,
+            date = excluded.date,
+            result = excluded.result,
+            user_rating = excluded.user_rating,
+            opp_rating = excluded.opp_rating
+    """, {
+        "game_id": game_id, "username": username, "end_time": meta.get("end_time"),
+        "date": game.headers.get("Date", ""), "white": game.headers.get("White", ""),
+        "black": game.headers.get("Black", ""), "result": result_for_user(game, username),
+        "user_color": meta.get("user_color", ""), "user_rating": meta.get("user_rating"),
+        "opp_rating": meta.get("opp_rating"), "eco": game.headers.get("ECO", ""),
+        "opening": eco_name(game), "time_control": game.headers.get("TimeControl", ""),
+        "pgn": str(game), "first_seen_at": datetime.now(timezone.utc).isoformat(),
+    })
 
 
 def save_analysis(username, game_id, depth, recs):
     if not game_id:
         return
-    conn = get_db_connection()
     note = calculer_note_partie(recs)
     acpl = round(sum(r["drop"] for r in recs) / len(recs), 1) if recs else 0.0
     blunders = sum(1 for r in recs if r["category"] == "Gaffe")
@@ -176,38 +245,38 @@ def save_analysis(username, game_id, depth, recs):
     inaccuracies = sum(1 for r in recs if r["category"] == "Imprécision")
     zeitnot = sum(1 for r in recs if r.get("time_pressure"))
     zeitnot_ratio = round(zeitnot / len(recs), 2) if recs else 0.0
-    conn.execute("""
+    db_execute("""
         INSERT INTO analyses (game_id, username, depth, analyzed_at, note, acpl, blunders,
                                errors, inaccuracies, total_moves, zeitnot_ratio, details_json)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(game_id, username) DO UPDATE SET
-            depth=excluded.depth, analyzed_at=excluded.analyzed_at, note=excluded.note,
-            acpl=excluded.acpl, blunders=excluded.blunders, errors=excluded.errors,
-            inaccuracies=excluded.inaccuracies, total_moves=excluded.total_moves,
-            zeitnot_ratio=excluded.zeitnot_ratio, details_json=excluded.details_json
+        VALUES (:game_id, :username, :depth, :analyzed_at, :note, :acpl, :blunders,
+                :errors, :inaccuracies, :total_moves, :zeitnot_ratio, :details_json)
+        ON CONFLICT (game_id, username) DO UPDATE SET
+            depth = excluded.depth, analyzed_at = excluded.analyzed_at, note = excluded.note,
+            acpl = excluded.acpl, blunders = excluded.blunders, errors = excluded.errors,
+            inaccuracies = excluded.inaccuracies, total_moves = excluded.total_moves,
+            zeitnot_ratio = excluded.zeitnot_ratio, details_json = excluded.details_json
         WHERE excluded.depth >= analyses.depth
-    """, (
-        game_id, username, depth, datetime.now(timezone.utc).isoformat(), note, acpl,
-        blunders, errors, inaccuracies, len(recs), zeitnot_ratio, json.dumps(recs),
-    ))
-    conn.commit()
+    """, {
+        "game_id": game_id, "username": username, "depth": depth,
+        "analyzed_at": datetime.now(timezone.utc).isoformat(), "note": note, "acpl": acpl,
+        "blunders": blunders, "errors": errors, "inaccuracies": inaccuracies,
+        "total_moves": len(recs), "zeitnot_ratio": zeitnot_ratio, "details_json": json.dumps(recs),
+    })
 
 
 def get_cached_analysis(username, game_id, min_depth):
     if not game_id:
         return None
-    conn = get_db_connection()
-    row = conn.execute(
-        "SELECT depth, details_json FROM analyses WHERE username=? AND game_id=?",
-        (username, game_id),
-    ).fetchone()
+    row = db_fetchone(
+        "SELECT depth, details_json FROM analyses WHERE username=:username AND game_id=:game_id",
+        {"username": username, "game_id": game_id},
+    )
     if row and row[0] is not None and row[0] >= min_depth:
         return json.loads(row[1])
     return None
 
 
 def load_history_df(username):
-    conn = get_db_connection()
     query = """
         SELECT g.game_id, g.end_time, g.date, g.white, g.black, g.result, g.user_color,
                g.user_rating, g.opp_rating, g.opening, g.time_control,
@@ -215,16 +284,17 @@ def load_history_df(username):
                a.zeitnot_ratio, a.analyzed_at
         FROM games g
         LEFT JOIN analyses a ON g.game_id = a.game_id AND g.username = a.username
-        WHERE g.username = ?
+        WHERE g.username = :username
         ORDER BY g.end_time ASC
     """
-    return pd.read_sql_query(query, conn, params=(username,))
+    return db_query_df(query, {"username": username})
 
 
 def load_all_games_from_db(username):
-    conn = get_db_connection()
-    rows = conn.execute("SELECT pgn FROM games WHERE username=? ORDER BY end_time ASC",
-                         (username,)).fetchall()
+    rows = db_fetchall(
+        "SELECT pgn FROM games WHERE username=:username ORDER BY end_time ASC",
+        {"username": username},
+    )
     out = []
     for (pgn_text,) in rows:
         g = chess.pgn.read_game(io.StringIO(pgn_text))
@@ -234,14 +304,13 @@ def load_all_games_from_db(username):
 
 
 def load_all_puzzles(username, limit=300):
-    conn = get_db_connection()
-    rows = conn.execute("""
+    rows = db_fetchall("""
         SELECT g.game_id, g.date, g.white, g.black, a.details_json
         FROM analyses a JOIN games g ON a.game_id = g.game_id AND a.username = g.username
-        WHERE a.username = ?
+        WHERE a.username = :username
         ORDER BY g.end_time DESC
-        LIMIT ?
-    """, (username, limit)).fetchall()
+        LIMIT :limit
+    """, {"username": username, "limit": limit})
     puzzles = []
     for game_id, date, white, black, dj in rows:
         try:
@@ -258,9 +327,10 @@ def load_all_puzzles(username, limit=300):
 
 def load_game_pgn_and_color(username, game_id):
     """Renvoie (texte pgn, couleur de l'utilisateur 'white'/'black') pour une partie donnée."""
-    conn = get_db_connection()
-    row = conn.execute("SELECT pgn, user_color FROM games WHERE username=? AND game_id=?",
-                        (username, game_id)).fetchone()
+    row = db_fetchone(
+        "SELECT pgn, user_color FROM games WHERE username=:username AND game_id=:game_id",
+        {"username": username, "game_id": game_id},
+    )
     return (row[0], row[1]) if row else (None, None)
 
 
@@ -307,33 +377,33 @@ LEITNER_INTERVALS = {1: 1, 2: 3, 3: 7, 4: 14, 5: 30}  # jours avant la prochaine
 
 
 def load_puzzle_review_states(username):
-    conn = get_db_connection()
-    rows = conn.execute(
-        "SELECT game_id, ply, box, next_review, review_count FROM puzzle_reviews WHERE username=?",
-        (username,),
-    ).fetchall()
+    rows = db_fetchall(
+        "SELECT game_id, ply, box, next_review, review_count FROM puzzle_reviews WHERE username=:username",
+        {"username": username},
+    )
     return {(game_id, ply): {"box": box, "next_review": next_review, "review_count": review_count}
             for game_id, ply, box, next_review, review_count in rows}
 
 
 def record_review(username, game_id, ply, correct):
-    conn = get_db_connection()
-    row = conn.execute(
-        "SELECT box FROM puzzle_reviews WHERE username=? AND game_id=? AND ply=?",
-        (username, game_id, ply),
-    ).fetchone()
+    row = db_fetchone(
+        "SELECT box FROM puzzle_reviews WHERE username=:username AND game_id=:game_id AND ply=:ply",
+        {"username": username, "game_id": game_id, "ply": ply},
+    )
     box = row[0] if row else 1
     box = min(box + 1, 5) if correct else 1
     next_review = (datetime.now(timezone.utc) + timedelta(days=LEITNER_INTERVALS[box])).isoformat()
-    conn.execute("""
+    db_execute("""
         INSERT INTO puzzle_reviews (username, game_id, ply, box, next_review, last_result, review_count, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 1, ?)
-        ON CONFLICT(username, game_id, ply) DO UPDATE SET
-            box=excluded.box, next_review=excluded.next_review, last_result=excluded.last_result,
-            review_count=puzzle_reviews.review_count + 1, updated_at=excluded.updated_at
-    """, (username, game_id, ply, box, next_review, "correct" if correct else "incorrect",
-          datetime.now(timezone.utc).isoformat()))
-    conn.commit()
+        VALUES (:username, :game_id, :ply, :box, :next_review, :last_result, 1, :updated_at)
+        ON CONFLICT (username, game_id, ply) DO UPDATE SET
+            box = excluded.box, next_review = excluded.next_review, last_result = excluded.last_result,
+            review_count = puzzle_reviews.review_count + 1, updated_at = excluded.updated_at
+    """, {
+        "username": username, "game_id": game_id, "ply": ply, "box": box,
+        "next_review": next_review, "last_result": "correct" if correct else "incorrect",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    })
 
 
 def load_due_puzzles(username, limit=300):
@@ -368,16 +438,15 @@ def load_due_puzzles(username, limit=300):
 
 
 def lifetime_stats(username):
-    conn = get_db_connection()
-    row = conn.execute("""
+    row = db_fetchone("""
         SELECT COUNT(*) AS n_games,
                SUM(CASE WHEN a.game_id IS NOT NULL THEN 1 ELSE 0 END) AS n_analyzed,
                AVG(a.note) AS avg_note,
                SUM(a.blunders) AS total_blunders,
                SUM(a.errors) AS total_errors
         FROM games g LEFT JOIN analyses a ON g.game_id = a.game_id AND g.username = a.username
-        WHERE g.username = ?
-    """, (username,)).fetchone()
+        WHERE g.username = :username
+    """, {"username": username})
     return {
         "n_games": row[0] or 0,
         "n_analyzed": row[1] or 0,
@@ -388,10 +457,9 @@ def lifetime_stats(username):
 
 
 def clear_history(username):
-    conn = get_db_connection()
-    conn.execute("DELETE FROM analyses WHERE username=?", (username,))
-    conn.execute("DELETE FROM games WHERE username=?", (username,))
-    conn.commit()
+    db_execute("DELETE FROM analyses WHERE username=:username", {"username": username})
+    db_execute("DELETE FROM puzzle_reviews WHERE username=:username", {"username": username})
+    db_execute("DELETE FROM games WHERE username=:username", {"username": username})
 
 
 def compute_datetime(row):
@@ -428,13 +496,12 @@ def rating_gap_bucket(diff):
 def load_theme_batches(username, recent_n=10):
     """Renvoie (lignes récentes, lignes précédentes) triées de la plus
     récente à la plus ancienne, chaque ligne = (end_time, details_json)."""
-    conn = get_db_connection()
-    rows = conn.execute("""
+    rows = db_fetchall("""
         SELECT g.end_time, a.details_json
         FROM analyses a JOIN games g ON a.game_id = g.game_id AND a.username = g.username
-        WHERE a.username = ?
+        WHERE a.username = :username
         ORDER BY g.end_time DESC
-    """, (username,)).fetchall()
+    """, {"username": username})
     recent_rows = rows[:recent_n]
     previous_rows = rows[recent_n:recent_n * 2]
     return recent_rows, previous_rows
@@ -526,13 +593,12 @@ def _summarize_period(df):
 
 
 def _top_theme_for_period(username, df):
-    conn = get_db_connection()
     counter = Counter()
     for game_id in df["game_id"]:
-        row = conn.execute(
-            "SELECT details_json FROM analyses WHERE username=? AND game_id=?",
-            (username, game_id),
-        ).fetchone()
+        row = db_fetchone(
+            "SELECT details_json FROM analyses WHERE username=:username AND game_id=:game_id",
+            {"username": username, "game_id": game_id},
+        )
         if not row or not row[0]:
             continue
         try:
