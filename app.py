@@ -17,6 +17,18 @@ Nouveautés v3 :
 - Nouvel onglet "Rapport hebdo" : bilan auto-généré de la semaine en cours
   comparée à la précédente (parties, classement, note, gaffes, thème du
   moment), avec une version texte copiable.
+- Thèmes d'erreur plus précis : la meilleure réponse adverse calculée par
+  Stockfish (et pas seulement la position) sert désormais à distinguer
+  "fourchette subie", "clouage subi", "mat forcé permis" et "pièce déjà en
+  prise ignorée" (vs. "mise en prise par ce coup"). Les catégories
+  générales (Gaffe tactique majeure, Erreur de calcul, Imprécision
+  positionnelle) restent le filet de sécurité pour ce que ces heuristiques
+  n'identifient pas — une classification exhaustive de tous les motifs
+  tactiques nommés (clouage, déviation, x-ray, zugzwang...) demanderait un
+  moteur de reconnaissance dédié, ce qui dépasse ce script.
+- Copie en un clic (bouton HTML + JS) pour l'export Gemini et le rapport
+  hebdomadaire, avec repli manuel discret si le presse-papiers du
+  navigateur est bloqué.
 
 Nouveautés v2 (rappel) :
 - Historique persistant en base SQLite locale (coach_echecs_history.db) :
@@ -42,15 +54,17 @@ import json
 import re
 import sqlite3
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import chess
 import chess.pgn
 import chess.engine
+import chess.svg
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as st_components
 
 APP_TITLE = "♟️ Mon Coach d'Échecs"
 CHESS_API = "https://api.chess.com/pub"
@@ -107,6 +121,19 @@ def init_db():
             zeitnot_ratio REAL,
             details_json TEXT,
             PRIMARY KEY (game_id, username)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS puzzle_reviews (
+            username TEXT NOT NULL,
+            game_id TEXT NOT NULL,
+            ply INTEGER NOT NULL,
+            box INTEGER DEFAULT 1,
+            next_review TEXT,
+            last_result TEXT,
+            review_count INTEGER DEFAULT 0,
+            updated_at TEXT,
+            PRIMARY KEY (username, game_id, ply)
         )
     """)
     conn.commit()
@@ -227,6 +254,117 @@ def load_all_puzzles(username, limit=300):
                 entry.update({"game_id": game_id, "date": date, "white": white, "black": black})
                 puzzles.append(entry)
     return puzzles
+
+
+def load_game_pgn_and_color(username, game_id):
+    """Renvoie (texte pgn, couleur de l'utilisateur 'white'/'black') pour une partie donnée."""
+    conn = get_db_connection()
+    row = conn.execute("SELECT pgn, user_color FROM games WHERE username=? AND game_id=?",
+                        (username, game_id)).fetchone()
+    return (row[0], row[1]) if row else (None, None)
+
+
+def board_before_ply(pgn_text, ply):
+    """Reconstruit la position juste avant le coup n°`ply` (1-indexé, dans
+    l'ordre du fil principal de la partie) et renvoie (position, coup joué)."""
+    if not pgn_text:
+        return None, None
+    game = chess.pgn.read_game(io.StringIO(pgn_text))
+    if game is None:
+        return None, None
+    moves = list(game.mainline_moves())
+    idx = ply - 1
+    if idx < 0 or idx >= len(moves):
+        return None, None
+    board = game.board()
+    for m in moves[:idx]:
+        board.push(m)
+    return board, moves[idx]
+
+
+def render_puzzle_board(board, user_color_str, best_san=None):
+    """Affiche un échiquier SVG (via python-chess), orienté du point de vue
+    de l'utilisateur, avec une flèche verte sur le meilleur coup si fourni."""
+    if board is None:
+        return
+    orientation = chess.BLACK if user_color_str == "black" else chess.WHITE
+    arrows = []
+    if best_san:
+        try:
+            mv = board.parse_san(best_san)
+            arrows.append(chess.svg.Arrow(mv.from_square, mv.to_square, color="#15781Bcc"))
+        except Exception:
+            pass
+    svg = chess.svg.board(board, size=360, orientation=orientation, arrows=arrows)
+    st_components.html(svg, height=390)
+
+
+# -----------------------------
+# Révision espacée des puzzles personnels (méthode Leitner)
+# -----------------------------
+
+LEITNER_INTERVALS = {1: 1, 2: 3, 3: 7, 4: 14, 5: 30}  # jours avant la prochaine révision
+
+
+def load_puzzle_review_states(username):
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT game_id, ply, box, next_review, review_count FROM puzzle_reviews WHERE username=?",
+        (username,),
+    ).fetchall()
+    return {(game_id, ply): {"box": box, "next_review": next_review, "review_count": review_count}
+            for game_id, ply, box, next_review, review_count in rows}
+
+
+def record_review(username, game_id, ply, correct):
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT box FROM puzzle_reviews WHERE username=? AND game_id=? AND ply=?",
+        (username, game_id, ply),
+    ).fetchone()
+    box = row[0] if row else 1
+    box = min(box + 1, 5) if correct else 1
+    next_review = (datetime.now(timezone.utc) + timedelta(days=LEITNER_INTERVALS[box])).isoformat()
+    conn.execute("""
+        INSERT INTO puzzle_reviews (username, game_id, ply, box, next_review, last_result, review_count, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+        ON CONFLICT(username, game_id, ply) DO UPDATE SET
+            box=excluded.box, next_review=excluded.next_review, last_result=excluded.last_result,
+            review_count=puzzle_reviews.review_count + 1, updated_at=excluded.updated_at
+    """, (username, game_id, ply, box, next_review, "correct" if correct else "incorrect",
+          datetime.now(timezone.utc).isoformat()))
+    conn.commit()
+
+
+def load_due_puzzles(username, limit=300):
+    """Renvoie (puzzles à réviser aujourd'hui, tous les puzzles enrichis avec
+    leur boîte Leitner), triés boîte croissante puis date."""
+    puzzles = load_all_puzzles(username, limit=limit)
+    review_states = load_puzzle_review_states(username)
+    now = pd.Timestamp.now(tz="UTC")
+
+    enriched = []
+    for p in puzzles:
+        key = (p["game_id"], p["ply"])
+        rev = review_states.get(key)
+        if rev is None:
+            box, review_count, due = 1, 0, True
+        else:
+            box = rev["box"]
+            review_count = rev["review_count"]
+            try:
+                due = pd.Timestamp(rev["next_review"]) <= now
+            except Exception:
+                due = True
+        p2 = dict(p)
+        p2["box"] = box
+        p2["review_count"] = review_count
+        p2["due"] = due
+        enriched.append(p2)
+
+    due_puzzles = [p for p in enriched if p["due"]]
+    due_puzzles.sort(key=lambda p: (p["box"], p.get("date", "")))
+    return due_puzzles, enriched
 
 
 def lifetime_stats(username):
@@ -535,6 +673,10 @@ THEME_TO_LICHESS_ANGLE = {
     "Gaffe tactique majeure": "crushing",
     "Erreur de calcul / Structure": "middlegame",
     "Imprécision positionnelle": "middlegame",
+    "Fourchette subie": "fork",
+    "Clouage subi": "pin",
+    "A permis un mat forcé": "defensiveMove",
+    "N'a pas paré une pièce déjà en prise": "hangingPiece",
 }
 
 
@@ -564,6 +706,86 @@ def get_lichess_puzzles_for_theme(theme, n=3, difficulty="normal"):
             "url": f"https://lichess.org/training/{pid}",
         })
     return puzzles
+
+
+# -----------------------------
+# Écarts à la théorie d'ouverture (API Opening Explorer de Lichess)
+# -----------------------------
+
+LICHESS_EXPLORER_API = "https://explorer.lichess.org/lichess"
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_explorer_stats(fen, speeds="rapid", top_n=8):
+    """Interroge la base Lichess (parties à la cadence donnée) pour une
+    position. Mis en cache 24h par position : les débuts de partie se
+    répètent beaucoup, donc peu d'appels réels après les premières parties."""
+    try:
+        r = requests.get(
+            LICHESS_EXPLORER_API,
+            params={"variant": "standard", "fen": fen, "speeds": speeds, "moves": top_n},
+            headers={"User-Agent": "MonCoachEchecs/3.0 personal-training-app"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return None
+
+
+def most_recent_games(games_list, n):
+    """Trie une liste de chess.pgn.Game par date (en-tête PGN) et renvoie
+    les n plus récentes, quel que soit l'ordre de la liste d'origine."""
+    def game_date(g):
+        try:
+            return datetime.strptime(g.headers.get("Date", ""), "%Y.%m.%d")
+        except Exception:
+            return datetime.min
+    sorted_games = sorted(games_list, key=game_date)
+    return sorted_games[-n:] if len(sorted_games) > n else sorted_games
+
+
+def find_opening_deviations(username, games_list, max_ply=20, min_games_threshold=5, speeds="rapid"):
+    """Pour chaque partie, repère le premier coup de l'utilisateur qui ne
+    figure pas parmi les coups les plus joués selon la base Lichess (à la
+    cadence donnée) — utile pour voir où s'arrête la préparation connue.
+    Renvoie aussi un indicateur si l'API n'a pas pu être contactée du tout."""
+    results = []
+    api_reachable = False
+    for game in games_list:
+        u_color = user_color(game, username)
+        if u_color is None:
+            continue
+        board = game.board()
+        deviation = None
+        for ply, move in enumerate(game.mainline_moves()):
+            if ply >= max_ply:
+                break
+            mover = board.turn
+            if mover == u_color:
+                fen = board.fen()
+                data = get_explorer_stats(fen, speeds=speeds)
+                if data is not None:
+                    api_reachable = True
+                if data and data.get("moves"):
+                    total_games = sum(m.get("white", 0) + m.get("draws", 0) + m.get("black", 0)
+                                       for m in data["moves"])
+                    top_ucis = {m["uci"] for m in data["moves"]}
+                    if total_games >= min_games_threshold and move.uci() not in top_ucis:
+                        deviation = {
+                            "ply": ply, "move_no": ply // 2 + 1, "san_joue": board.san(move),
+                            "alternatives": [m["san"] for m in data["moves"][:3]],
+                        }
+                        break
+            board.push(move)
+        if deviation:
+            results.append({
+                "date": game.headers.get("Date", ""),
+                "white": game.headers.get("White", ""),
+                "black": game.headers.get("Black", ""),
+                **deviation,
+            })
+    return results, api_reachable
 
 
 def parse_game(game_dict):
@@ -737,6 +959,69 @@ def generate_coach_prompt(game, recs=None):
 
 
 # -----------------------------
+# Copie en un clic (sans étape de sélection manuelle)
+# -----------------------------
+
+def copy_button(text, label="📋 Copier dans le presse-papiers", key="default"):
+    """Bouton HTML autonome : copie `text` dans le presse-papiers au clic,
+    sans passer par une sélection manuelle. Essaie l'API Clipboard moderne,
+    puis se rabat sur document.execCommand('copy') si elle est indisponible
+    (contexte iframe, permissions du navigateur, etc.)."""
+    text_js = json.dumps(text)
+    safe_key = re.sub(r"[^a-zA-Z0-9_-]", "_", str(key))
+    html_code = f"""
+    <div style="font-family: 'Source Sans Pro', sans-serif;">
+      <button id="copy-btn-{safe_key}" style="
+          background-color:#FF4B4B;color:white;border:none;border-radius:8px;
+          padding:0.5em 1em;font-size:0.9em;cursor:pointer;">
+        {label}
+      </button>
+      <span id="copy-status-{safe_key}" style="margin-left:10px;font-size:0.9em;"></span>
+    </div>
+    <script>
+      (function() {{
+        const btn = document.getElementById("copy-btn-{safe_key}");
+        const status = document.getElementById("copy-status-{safe_key}");
+        const text = {text_js};
+        btn.addEventListener("click", async () => {{
+          let ok = false;
+          try {{
+            await navigator.clipboard.writeText(text);
+            ok = true;
+          }} catch (e) {{
+            try {{
+              const ta = document.createElement("textarea");
+              ta.value = text;
+              ta.style.position = "fixed";
+              ta.style.opacity = "0";
+              document.body.appendChild(ta);
+              ta.focus();
+              ta.select();
+              ok = document.execCommand("copy");
+              document.body.removeChild(ta);
+            }} catch (e2) {{
+              ok = false;
+            }}
+          }}
+          status.style.color = ok ? "#2ecc71" : "#e67e22";
+          status.textContent = ok ? "✅ Copié !" : "⚠️ Échec — utilise le texte ci-dessous à la place.";
+          setTimeout(() => {{ status.textContent = ""; }}, 3000);
+        }});
+      }})();
+    </script>
+    """
+    st_components.html(html_code, height=45)
+
+
+def copyable_text_block(text, label="📋 Copier dans le presse-papiers", key="default"):
+    """Bouton de copie en un clic + repli manuel discret si jamais ça échoue
+    (certains navigateurs/entreprises bloquent le presse-papiers en script)."""
+    copy_button(text, label=label, key=key)
+    with st.expander("Afficher le texte (si la copie automatique ne fonctionne pas)"):
+        st.text_area("Texte", value=text, height=200, key=f"ta_{key}", label_visibility="collapsed")
+
+
+# -----------------------------
 # Analyse Stockfish
 # -----------------------------
 
@@ -788,33 +1073,108 @@ def calculer_note_partie(recs):
     return round(max(0.0, min(10.0, 10 - acpl / 40)), 1)
 
 
-def identifier_theme_coup(before_board, move, drop, time_pressure=False):
+PIECE_VALUES = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9, chess.KING: 0}
+
+
+def _hanging_squares(board, color):
+    """Cases occupées par une pièce de `color` attaquée et non défendue."""
+    squares = []
+    for sq in chess.SQUARES:
+        p = board.piece_at(sq)
+        if p and p.color == color:
+            if board.is_attacked_by(not color, sq) and not board.is_attacked_by(color, sq):
+                squares.append(sq)
+    return squares
+
+
+def _detect_fork(board_after, refutation_move, user_color):
+    """La meilleure réponse adverse (calculée par Stockfish) attaque-t-elle
+    d'un coup au moins 2 pièces (≥ cavalier) de l'utilisateur ? -> fourchette."""
+    if board_after is None or refutation_move is None:
+        return False
+    try:
+        temp = board_after.copy()
+        if temp.piece_at(refutation_move.from_square) is None:
+            return False
+        temp.push(refutation_move)
+        dest = refutation_move.to_square
+        count = 0
+        for sq in temp.attacks(dest):
+            p = temp.piece_at(sq)
+            if p and p.color == user_color and PIECE_VALUES.get(p.piece_type, 0) >= 3:
+                count += 1
+        return count >= 2
+    except Exception:
+        return False
+
+
+def _detect_new_pin(before_board, board_after, user_color):
+    """Le coup joué a-t-il fait apparaître un clouage sur une pièce de
+    l'utilisateur qui n'existait pas avant ?"""
+    try:
+        before_pins = sum(
+            1 for sq in chess.SQUARES
+            if before_board.piece_at(sq) and before_board.piece_at(sq).color == user_color
+            and before_board.is_pinned(user_color, sq)
+        )
+        after_pins = sum(
+            1 for sq in chess.SQUARES
+            if board_after.piece_at(sq) and board_after.piece_at(sq).color == user_color
+            and board_after.is_pinned(user_color, sq)
+        )
+        return after_pins > before_pins
+    except Exception:
+        return False
+
+
+def identifier_theme_coup(before_board, move, drop, time_pressure=False,
+                           board_after=None, refutation_move=None, walked_into_mate=False):
+    """Identifie le thème du coup. Utilise, quand elles sont fournies, la
+    position après le coup et la meilleure réponse adverse calculée par
+    Stockfish (refutation_move) pour distinguer des motifs plus précis
+    (fourchette, clouage, mat forcé permis, pièce déjà en prise ignorée)
+    plutôt que de retomber systématiquement sur les catégories générales."""
     if drop < 50:
         return "Coup solide"
 
     if time_pressure and drop >= 100:
         return "Précipitation (zeitnot)"
 
+    if walked_into_mate:
+        return "A permis un mat forcé"
+
+    own_color = before_board.turn
     piece_moved = before_board.piece_at(move.from_square)
-    after_board = before_board.copy()
-    after_board.push(move)
+
+    if board_after is None:
+        board_after = before_board.copy()
+        board_after.push(move)
 
     if piece_moved and piece_moved.piece_type == chess.KING:
         return "Roi exposé / Échec subi"
 
-    own_color = before_board.turn
     king_sq_before = before_board.king(own_color)
-    king_sq_after = after_board.king(own_color)
+    king_sq_after = board_after.king(own_color)
     if king_sq_before is not None and king_sq_after is not None:
         attackers_before = len(before_board.attackers(not own_color, king_sq_before))
-        attackers_after = len(after_board.attackers(not own_color, king_sq_after))
+        attackers_after = len(board_after.attackers(not own_color, king_sq_after))
         if attackers_after > attackers_before and attackers_after > 0:
             return "Roi exposé / Échec subi"
 
+    if _detect_fork(board_after, refutation_move, own_color):
+        return "Fourchette subie"
+
+    if _detect_new_pin(before_board, board_after, own_color):
+        return "Clouage subi"
+
+    pre_existing_hanging = [sq for sq in _hanging_squares(before_board, own_color) if sq != move.from_square]
+    if refutation_move is not None and pre_existing_hanging and refutation_move.to_square in pre_existing_hanging:
+        return "N'a pas paré une pièce déjà en prise"
+
     if not before_board.is_capture(move):
         to_square = move.to_square
-        if (after_board.is_attacked_by(not before_board.turn, to_square)
-                and not after_board.is_attacked_by(before_board.turn, to_square)):
+        if (board_after.is_attacked_by(not own_color, to_square)
+                and not board_after.is_attacked_by(own_color, to_square)):
             return "Pièce suspendue (non protégée)"
 
     captures_visibles = list(before_board.generate_legal_captures())
@@ -865,6 +1225,7 @@ def analyze_game(game, username, engine, depth=12, max_plies=160):
 
         board.push(move)
 
+        info_after = None
         if board.is_checkmate():
             eval_after = -100000 if board.turn == u_color else 100000
         elif board.is_stalemate() or board.is_insufficient_material():
@@ -876,6 +1237,20 @@ def analyze_game(game, username, engine, depth=12, max_plies=160):
             except Exception:
                 eval_after = eval_before
 
+        # La meilleure réponse adverse selon Stockfish sert à affiner le thème
+        # (fourchette, clouage, mat forcé...) plutôt que de deviner à l'aveugle.
+        refutation_move = None
+        walked_into_mate = False
+        if info_after is not None:
+            pv_after = info_after.get("pv", [])
+            refutation_move = pv_after[0] if pv_after else None
+            try:
+                sc_after = info_after["score"].pov(u_color)
+                if sc_after.is_mate() and sc_after.mate() is not None and sc_after.mate() < 0 and eval_before > -3000:
+                    walked_into_mate = True
+            except Exception:
+                pass
+
         if mover == u_color:
             time_pressure = clock_left is not None and clock_left < 60
             if board.is_checkmate() and board.turn != u_color:
@@ -885,7 +1260,9 @@ def analyze_game(game, username, engine, depth=12, max_plies=160):
             else:
                 drop = max(0, eval_before - eval_after)
                 category = classify_drop(drop)
-                theme = identifier_theme_coup(before, move, drop, time_pressure)
+                theme = identifier_theme_coup(before, move, drop, time_pressure,
+                                               board_after=board, refutation_move=refutation_move,
+                                               walked_into_mate=walked_into_mate)
 
             records.append({
                 "ply": ply + 1,
@@ -979,6 +1356,21 @@ VIDEOS_PAR_THEME = {
     "Précipitation (zeitnot)": [
         ("🎥 Bien gérer sa pendule aux échecs", "https://www.youtube.com/results?search_query=gestion+du+temps+echecs+pendule"),
         ("🎥 Jouer vite sans sacrifier la qualité", "https://www.youtube.com/results?search_query=jouer+vite+echecs+blitz+rapide"),
+    ],
+    "Fourchette subie": [
+        ("🎥 Repérer et éviter les fourchettes", "https://www.youtube.com/results?search_query=fourchette+echecs+eviter"),
+        ("🎥 Les fourchettes de cavalier expliquées", "https://www.youtube.com/results?search_query=fourchette+cavalier+echecs"),
+    ],
+    "Clouage subi": [
+        ("🎥 Comprendre et exploiter les clouages", "https://www.youtube.com/results?search_query=clouage+echecs+explication"),
+        ("🎥 Se défendre contre un clouage", "https://www.youtube.com/results?search_query=se+defendre+clouage+echecs"),
+    ],
+    "A permis un mat forcé": [
+        ("🎥 Calculer les mats forcés et s'en défendre", "https://www.youtube.com/results?search_query=defendre+mat+force+echecs"),
+        ("🎥 Sécurité du roi en milieu de partie", "https://www.youtube.com/results?search_query=securite+du+roi+milieu+de+partie+echecs"),
+    ],
+    "N'a pas paré une pièce déjà en prise": [
+        ("🎥 Vérifier systématiquement les menaces avant de jouer", "https://www.youtube.com/results?search_query=verifier+les+menaces+avant+de+jouer+echecs"),
     ],
 }
 
@@ -1222,10 +1614,8 @@ with tabs[2]:
                             st.write(f"💡 **Recommandation Stockfish :** **{r['best']}** (Éval : {r['eval_before']})")
 
             st.divider()
-            if st.button("📋 Copier pour Analyse Gemini", key="btn_gemini_analyse"):
-                prompt = generate_coach_prompt(games[selected], recs)
-                st.info("Copie le texte ci-dessous et colle-le dans notre discussion !")
-                st.text_area("Texte à copier", value=prompt, height=200)
+            prompt = generate_coach_prompt(games[selected], recs)
+            copyable_text_block(prompt, label="📋 Copier l'analyse pour Gemini", key=f"gemini_{selected}")
 
 # --- Progression ---
 with tabs[3]:
@@ -1358,6 +1748,35 @@ with tabs[4]:
     else:
         st.warning("Pas assez de données pour générer des statistiques sur les ouvertures.")
 
+    st.divider()
+    st.markdown("### 🔍 Écarts à la théorie d'ouverture (base Lichess, cadence rapide)")
+    st.caption(
+        "Repère, pour tes parties les plus récentes, le premier coup qui sort des coups les plus joués "
+        "dans la base Lichess à cadence rapide — utile pour voir où s'arrête ta préparation. "
+        "Nécessite de contacter l'API publique de Lichess (explorer.lichess.org)."
+    )
+    n_games_explorer = st.slider("Nombre de parties récentes à vérifier", 3, 20, 8, key="n_explorer")
+    if st.button("🔍 Analyser mes ouvertures récentes"):
+        recent_games_for_explorer = most_recent_games(games_pour_stats, n_games_explorer)
+        with st.spinner("Interrogation de la base Lichess (peut prendre quelques secondes)..."):
+            deviations, api_reachable = find_opening_deviations(username, recent_games_for_explorer)
+        st.session_state["opening_deviations"] = deviations
+        st.session_state["opening_deviations_api_ok"] = api_reachable
+
+    deviations = st.session_state.get("opening_deviations")
+    if deviations is not None:
+        if not st.session_state.get("opening_deviations_api_ok"):
+            st.warning("Impossible de contacter l'explorateur d'ouvertures Lichess pour le moment "
+                       "(service indisponible, ou accès restreint). Réessaie plus tard.")
+        elif not deviations:
+            st.success("Aucun écart notable détecté sur cet échantillon — tu restes dans les clous "
+                       "de la théorie sur ces parties (ou l'échantillon est trop petit pour conclure).")
+        else:
+            for d in deviations:
+                st.markdown(f"**{d['date']} — {d['white']} vs {d['black']}** : au coup {d['move_no']}, "
+                            f"tu as joué **{d['san_joue']}**, alors que la base privilégie "
+                            f"{', '.join(d['alternatives'])}.")
+
 # --- Entraînement & Ressources ---
 with tabs[5]:
     st.subheader("🎯 Entraînement & Ressources Pédagogiques")
@@ -1427,32 +1846,77 @@ with tabs[5]:
 
     st.divider()
 
-    st.markdown("### 🧩 Tes Puzzles Personnalisés (issus de tout ton historique)")
-    puzzles = load_all_puzzles(username)
+    st.markdown("### 🧩 Puzzles personnels (révision espacée)")
+    st.caption(
+        "Méthode Leitner : un coup que tu retrouves revient de moins en moins souvent (jusqu'à tous les 30 jours), "
+        "un coup raté revient vite (le lendemain). Basé sur l'ensemble de ton historique enregistré."
+    )
 
-    if not puzzles:
+    due_puzzles, all_puzzles_enriched = load_due_puzzles(username)
+
+    if not all_puzzles_enriched:
         st.info("Les moments clés à rejouer s'afficheront ici automatiquement dès qu'une partie sera analysée.")
     else:
-        st.write(f"**{len(puzzles)} moment(s) critique(s)** détecté(s) sur l'ensemble de ton historique :")
+        box_counts = Counter(p["box"] for p in all_puzzles_enriched)
+        box_cols = st.columns(5)
+        for i in range(1, 6):
+            box_cols[i - 1].metric(f"Boîte {i}", box_counts.get(i, 0))
 
-        selected_puzzle_idx = st.selectbox(
-            "Choisis un moment à rejouer :",
-            range(len(puzzles)),
-            format_func=lambda i: (
-                f"{puzzles[i]['date']} — {puzzles[i]['white']} vs {puzzles[i]['black']} — "
-                f"Coup {puzzles[i]['move_no']} ({puzzles[i].get('theme', puzzles[i]['category'])} : "
-                f"-{puzzles[i]['drop']/100:.2f} pions)"
-            ),
-        )
-        puzzle_data = puzzles[selected_puzzle_idx]
+        if not due_puzzles:
+            st.success(f"🎉 Aucun puzzle à réviser aujourd'hui parmi les {len(all_puzzles_enriched)} enregistrés — "
+                       f"reviens demain, ou analyse de nouvelles parties pour en ajouter.")
+        else:
+            st.write(f"**{len(due_puzzles)} puzzle(s) à réviser aujourd'hui** (sur {len(all_puzzles_enriched)} au total).")
+            puzzle_data = due_puzzles[0]
+            puzzle_key = f"{puzzle_data['game_id']}_{puzzle_data['ply']}"
 
-        st.markdown(f"**Situation (Coup {puzzle_data['move_no']}) :**")
-        st.write(f"Tu as joué : **{puzzle_data['san']}** (Évaluation : {puzzle_data['eval_after']})")
+            pgn_text, user_color_str = load_game_pgn_and_color(username, puzzle_data["game_id"])
+            board_before, _ = board_before_ply(pgn_text, puzzle_data["ply"]) if pgn_text else (None, None)
 
-        with st.expander("💡 Révéler la solution de Stockfish", expanded=False):
-            st.success(f"Le meilleur coup recommandé était : **{puzzle_data['best']}**")
-            st.write(f"Évaluation possible : **{puzzle_data['eval_before']}**")
-            st.info("🎯 **Exercice mental :** Visualise l'échiquier et cherche pourquoi ce coup était supérieur.")
+            st.markdown(f"**{puzzle_data['date']} — {puzzle_data['white']} vs {puzzle_data['black']} — "
+                        f"Coup {puzzle_data['move_no']}** · Boîte {puzzle_data['box']} · "
+                        f"{puzzle_data['review_count']} révision(s) précédente(s)")
+            st.caption(f"Thème : {puzzle_data.get('theme', puzzle_data['category'])} — "
+                       f"tu avais joué {puzzle_data['san']} (perte de {puzzle_data['drop'] / 100:.2f} pions)")
+
+            if board_before is not None:
+                render_puzzle_board(board_before, user_color_str)
+            else:
+                st.warning("Position introuvable (la partie n'est peut-être plus dans l'historique).")
+
+            with st.expander("💡 Révéler la solution", expanded=False):
+                st.success(f"Le meilleur coup était : **{puzzle_data['best']}**")
+                if board_before is not None:
+                    render_puzzle_board(board_before, user_color_str, best_san=puzzle_data["best"])
+                st.write(f"Ton coup : {puzzle_data['san']} (Éval après : {puzzle_data['eval_after']}) — "
+                         f"Coup recommandé : {puzzle_data['best']} (Éval avant : {puzzle_data['eval_before']})")
+
+                st.markdown("**As-tu retrouvé ce coup avant de regarder ?**")
+                b1, b2 = st.columns(2)
+                if b1.button("✅ Oui, trouvé", key=f"correct_{puzzle_key}", use_container_width=True):
+                    record_review(username, puzzle_data["game_id"], puzzle_data["ply"], correct=True)
+                    st.rerun()
+                if b2.button("❌ Non, pas trouvé", key=f"wrong_{puzzle_key}", use_container_width=True):
+                    record_review(username, puzzle_data["game_id"], puzzle_data["ply"], correct=False)
+                    st.rerun()
+
+        with st.expander("📚 Parcourir tous tes puzzles enregistrés"):
+            selected_puzzle_idx = st.selectbox(
+                "Choisis un moment à revoir librement :",
+                range(len(all_puzzles_enriched)),
+                format_func=lambda i: (
+                    f"{all_puzzles_enriched[i]['date']} — {all_puzzles_enriched[i]['white']} vs "
+                    f"{all_puzzles_enriched[i]['black']} — Coup {all_puzzles_enriched[i]['move_no']} "
+                    f"(Boîte {all_puzzles_enriched[i]['box']})"
+                ),
+                key="browse_all_puzzles",
+            )
+            browse_data = all_puzzles_enriched[selected_puzzle_idx]
+            pgn_text2, user_color_str2 = load_game_pgn_and_color(username, browse_data["game_id"])
+            board_before2, _ = board_before_ply(pgn_text2, browse_data["ply"]) if pgn_text2 else (None, None)
+            if board_before2 is not None:
+                render_puzzle_board(board_before2, user_color_str2)
+            st.write(f"Coup joué : **{browse_data['san']}** — Meilleur coup : **{browse_data['best']}**")
 
     st.divider()
 
@@ -1557,7 +2021,6 @@ with tabs[6]:
                 st.line_chart(note_weekly[["note_moy"]].rename(columns={"note_moy": "Note moyenne"}))
 
         st.divider()
-        if st.button("📋 Copier le rapport en texte"):
-            texte = generate_weekly_report_text(username, cur, prev, report["top_theme_week"],
-                                                 report["period_start"], report["period_end"])
-            st.text_area("Rapport à copier", value=texte, height=200)
+        texte = generate_weekly_report_text(username, cur, prev, report["top_theme_week"],
+                                             report["period_start"], report["period_end"])
+        copyable_text_block(texte, label="📋 Copier le rapport", key="weekly_report")
