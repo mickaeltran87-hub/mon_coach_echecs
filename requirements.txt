@@ -1,4 +1,6 @@
-streamlit>=1.40
-python-chess>=1.999
-requests>=2.32
-pandas>=2.2
+streamlit>=1.35
+chess
+pandas
+requests
+SQLAlchemy>=2.0
+psycopg2-binary
