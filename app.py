@@ -7,6 +7,15 @@ Dépendances : streamlit, python-chess (chess), pandas, requests, sqlalchemy
 Pour un déploiement sur Streamlit Community Cloud avec base Postgres, ajoute
 aussi le driver : pip install "psycopg2-binary" (voir requirements.txt fourni).
 
+Nouveautés v5 — inspirées de WhyThisMove :
+- Indices progressifs (4 niveaux : Observe / Direction / Exécute / Solution)
+  sur les puzzles personnels, au lieu d'un bouton "Révéler" tout-ou-rien —
+  textes générés par thème + par la position réelle, sans appel à une IA.
+- Nouvelle catégorie de puzzles : "Punir la gaffe adverse". L'app repère
+  désormais aussi les moments où l'ADVERSAIRE a gaffé et vérifie si tu as
+  trouvé la meilleure punition au coup suivant ; les occasions manquées
+  rejoignent la même file de révision espacée (Leitner) que tes puzzles.
+
 Nouveautés v4 — persistance qui survit à la mise en veille Streamlit Cloud :
 - PROBLÈME RÉSOLU : Streamlit Community Cloud ne garantit PAS la conservation
   des fichiers locaux (l'app peut les perdre à la mise en veille après 12h
@@ -149,6 +158,15 @@ def db_query_df(sql, params=None):
     return conn.query(sql, params=params or {}, ttl=0)
 
 
+def _ensure_column(table, column, coltype):
+    """Ajoute une colonne à une table existante si elle n'existe pas déjà
+    (migration sûre pour les bases créées par une version antérieure de l'app)."""
+    try:
+        db_execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+    except Exception:
+        pass  # la colonne existe déjà
+
+
 def init_db():
     try:
         if get_db_connection().engine.dialect.name == "sqlite":
@@ -190,9 +208,11 @@ def init_db():
             total_moves INTEGER,
             zeitnot_ratio REAL,
             details_json TEXT,
+            punish_json TEXT,
             PRIMARY KEY (game_id, username)
         )
     """)
+    _ensure_column("analyses", "punish_json", "TEXT")
     db_execute("""
         CREATE TABLE IF NOT EXISTS puzzle_reviews (
             username TEXT NOT NULL,
@@ -235,7 +255,7 @@ def upsert_game(username, game_id, meta, game):
     })
 
 
-def save_analysis(username, game_id, depth, recs):
+def save_analysis(username, game_id, depth, recs, punish_records=None):
     if not game_id:
         return
     note = calculer_note_partie(recs)
@@ -247,32 +267,40 @@ def save_analysis(username, game_id, depth, recs):
     zeitnot_ratio = round(zeitnot / len(recs), 2) if recs else 0.0
     db_execute("""
         INSERT INTO analyses (game_id, username, depth, analyzed_at, note, acpl, blunders,
-                               errors, inaccuracies, total_moves, zeitnot_ratio, details_json)
+                               errors, inaccuracies, total_moves, zeitnot_ratio, details_json,
+                               punish_json)
         VALUES (:game_id, :username, :depth, :analyzed_at, :note, :acpl, :blunders,
-                :errors, :inaccuracies, :total_moves, :zeitnot_ratio, :details_json)
+                :errors, :inaccuracies, :total_moves, :zeitnot_ratio, :details_json,
+                :punish_json)
         ON CONFLICT (game_id, username) DO UPDATE SET
             depth = excluded.depth, analyzed_at = excluded.analyzed_at, note = excluded.note,
             acpl = excluded.acpl, blunders = excluded.blunders, errors = excluded.errors,
             inaccuracies = excluded.inaccuracies, total_moves = excluded.total_moves,
-            zeitnot_ratio = excluded.zeitnot_ratio, details_json = excluded.details_json
+            zeitnot_ratio = excluded.zeitnot_ratio, details_json = excluded.details_json,
+            punish_json = excluded.punish_json
         WHERE excluded.depth >= analyses.depth
     """, {
         "game_id": game_id, "username": username, "depth": depth,
         "analyzed_at": datetime.now(timezone.utc).isoformat(), "note": note, "acpl": acpl,
         "blunders": blunders, "errors": errors, "inaccuracies": inaccuracies,
         "total_moves": len(recs), "zeitnot_ratio": zeitnot_ratio, "details_json": json.dumps(recs),
+        "punish_json": json.dumps(punish_records or []),
     })
 
 
 def get_cached_analysis(username, game_id, min_depth):
+    """Renvoie (recs, punish_records) si une analyse suffisamment profonde
+    est déjà en base, sinon None."""
     if not game_id:
         return None
     row = db_fetchone(
-        "SELECT depth, details_json FROM analyses WHERE username=:username AND game_id=:game_id",
+        "SELECT depth, details_json, punish_json FROM analyses WHERE username=:username AND game_id=:game_id",
         {"username": username, "game_id": game_id},
     )
     if row and row[0] is not None and row[0] >= min_depth:
-        return json.loads(row[1])
+        recs = json.loads(row[1])
+        punish_records = json.loads(row[2]) if row[2] else []
+        return recs, punish_records
     return None
 
 
@@ -319,6 +347,30 @@ def load_all_puzzles(username, limit=300):
             continue
         for r in recs:
             if r["category"] in ("Gaffe", "Erreur") and r.get("best"):
+                entry = dict(r)
+                entry.update({"game_id": game_id, "date": date, "white": white, "black": black})
+                puzzles.append(entry)
+    return puzzles
+
+
+def load_all_punish_puzzles(username, limit=300):
+    """Moments où l'adversaire a gaffé et où l'utilisateur n'a pas trouvé
+    (ou pas clairement trouvé) la meilleure punition."""
+    rows = db_fetchall("""
+        SELECT g.game_id, g.date, g.white, g.black, a.punish_json
+        FROM analyses a JOIN games g ON a.game_id = g.game_id AND a.username = g.username
+        WHERE a.username = :username AND a.punish_json IS NOT NULL
+        ORDER BY g.end_time DESC
+        LIMIT :limit
+    """, {"username": username, "limit": limit})
+    puzzles = []
+    for game_id, date, white, black, pj in rows:
+        try:
+            precs = json.loads(pj) if pj else []
+        except Exception:
+            continue
+        for r in precs:
+            if not r.get("punished", True):
                 entry = dict(r)
                 entry.update({"game_id": game_id, "date": date, "white": white, "black": black})
                 puzzles.append(entry)
@@ -406,10 +458,11 @@ def record_review(username, game_id, ply, correct):
     })
 
 
-def load_due_puzzles(username, limit=300):
-    """Renvoie (puzzles à réviser aujourd'hui, tous les puzzles enrichis avec
-    leur boîte Leitner), triés boîte croissante puis date."""
-    puzzles = load_all_puzzles(username, limit=limit)
+def _enrich_with_leitner(username, puzzles):
+    """Ajoute boîte Leitner / échéance à une liste de puzzles (partagée entre
+    les puzzles issus de tes propres erreurs et ceux de punition de gaffe
+    adverse — les deux utilisent la même table puzzle_reviews, sans
+    collision possible car (game_id, ply) est unique par coup joué)."""
     review_states = load_puzzle_review_states(username)
     now = pd.Timestamp.now(tz="UTC")
 
@@ -435,6 +488,17 @@ def load_due_puzzles(username, limit=300):
     due_puzzles = [p for p in enriched if p["due"]]
     due_puzzles.sort(key=lambda p: (p["box"], p.get("date", "")))
     return due_puzzles, enriched
+
+
+def load_due_puzzles(username, limit=300):
+    """Renvoie (puzzles à réviser aujourd'hui, tous les puzzles enrichis avec
+    leur boîte Leitner), triés boîte croissante puis date."""
+    return _enrich_with_leitner(username, load_all_puzzles(username, limit=limit))
+
+
+def load_due_punish_puzzles(username, limit=300):
+    """Idem, pour les occasions manquées de punir une gaffe adverse."""
+    return _enrich_with_leitner(username, load_all_punish_puzzles(username, limit=limit))
 
 
 def lifetime_stats(username):
@@ -1259,8 +1323,13 @@ def identifier_theme_coup(before_board, move, drop, time_pressure=False,
 
 
 def analyze_game(game, username, engine, depth=12, max_plies=160):
+    """Renvoie (records, punish_records) :
+    - records : les coups de l'utilisateur, classés comme avant.
+    - punish_records : les moments où l'ADVERSAIRE a gaffé (perte d'évaluation
+      >= 100 centipions pour lui) et si l'utilisateur a trouvé une punition
+      correcte au coup suivant."""
     if engine is None:
-        return []
+        return [], []
 
     u_color = user_color(game, username)
     if u_color is None:
@@ -1268,6 +1337,8 @@ def analyze_game(game, username, engine, depth=12, max_plies=160):
 
     board = game.board()
     records = []
+    punish_records = []
+    pending_punish = None
     ply = 0
 
     for node in game.mainline():
@@ -1284,10 +1355,18 @@ def analyze_game(game, username, engine, depth=12, max_plies=160):
             info_before = engine.analyse(before, chess.engine.Limit(depth=depth))
             pv_before = info_before.get("pv", [])
             best_move = pv_before[0] if pv_before else None
+            best_san = before.san(best_move) if best_move else None
             eval_before = score_cp(info_before["score"], u_color)
         except Exception:
             best_move = None
+            best_san = None
             eval_before = 0
+
+        # Si c'est le tour de l'utilisateur et qu'une gaffe adverse est en
+        # attente de résolution, le meilleur coup calculé ci-dessus EST la
+        # meilleure punition possible pour cette position.
+        if mover == u_color and pending_punish is not None:
+            pending_punish["best_response_san"] = best_san
 
         board.push(move)
 
@@ -1344,9 +1423,40 @@ def analyze_game(game, username, engine, depth=12, max_plies=160):
                 "time_pressure": bool(time_pressure),
             })
 
+            # Résout la gaffe adverse en attente, s'il y en a une : le coup
+            # qu'on vient d'analyser EST la réponse de l'utilisateur à cette gaffe.
+            if pending_punish is not None:
+                user_drop = max(0, pending_punish["eval_before_punish"] - eval_after)
+                best_resp = pending_punish.get("best_response_san")
+                punished = user_drop < 50 or (best_resp is not None and san == best_resp)
+                punish_records.append({
+                    "ply": pending_punish["ply"],
+                    "move_no": pending_punish["move_no"],
+                    "opponent_san": pending_punish["opponent_san"],
+                    "opponent_drop": pending_punish["opponent_drop"],
+                    "best_response_san": best_resp,
+                    "user_response_san": san,
+                    "user_drop": round(user_drop, 1),
+                    "punished": bool(punished),
+                })
+                pending_punish = None
+        else:
+            opponent_drop = max(0, eval_after - eval_before)
+            if opponent_drop >= 100:
+                pending_punish = {
+                    "ply": ply + 1,
+                    "move_no": ply // 2 + 1,
+                    "opponent_san": san,
+                    "opponent_drop": round(opponent_drop, 1),
+                    "eval_before_punish": eval_after,
+                    "best_response_san": None,
+                }
+            else:
+                pending_punish = None
+
         ply += 1
 
-    return records
+    return records, punish_records
 
 
 # -----------------------------
@@ -1441,6 +1551,92 @@ VIDEOS_PAR_THEME = {
 }
 
 
+# -----------------------------
+# Indices progressifs pour la révision des puzzles (inspiré de WhyThisMove)
+# -----------------------------
+# 4 niveaux : Observe -> Direction -> Exécute -> Solution complète.
+# Les niveaux 1 et 2 sont des textes génériques par thème (pas besoin d'IA),
+# le niveau 3 est dérivé de la position réelle (pièce/case de départ du
+# meilleur coup), le niveau 4 est la révélation complète.
+
+THEME_HINTS = {
+    "Pièce suspendue (non protégée)": {
+        "observe": "Repère tes pièces qui ne sont pas défendues en ce moment.",
+        "direction": "Le plan est de sauver ou de défendre cette pièce en danger.",
+    },
+    "N'a pas paré une pièce déjà en prise": {
+        "observe": "Une de tes pièces était déjà attaquée avant même ce coup. Laquelle ?",
+        "direction": "Il fallait s'occuper de cette pièce en danger avant de faire autre chose.",
+    },
+    "Fourchette subie": {
+        "observe": "Une pièce adverse pourrait, en un coup, attaquer deux de tes pièces à la fois.",
+        "direction": "Élimine cette pièce fourchetteuse, ou écarte une de tes pièces menacées avant qu'elle ne frappe.",
+    },
+    "Clouage subi": {
+        "observe": "Une de tes pièces est alignée avec ton roi sur une même ligne, colonne ou diagonale.",
+        "direction": "Le plan est d'éviter ou de rompre ce clouage avant qu'il ne soit exploité.",
+    },
+    "Roi exposé / Échec subi": {
+        "observe": "La sécurité de ton roi est le problème principal ici.",
+        "direction": "Pense défense : parer un échec, fermer une ligne d'attaque, ou mettre le roi à l'abri.",
+    },
+    "A permis un mat forcé": {
+        "observe": "Il existait une suite qui menait à un mat forcé. As-tu vérifié tous les échecs et captures forcés ?",
+        "direction": "Le plan est purement défensif : trouve le seul coup qui empêche la suite forcée.",
+    },
+    "Tactique ou capture ratée": {
+        "observe": "Il existait une capture ou un enchaînement tactique gagnant que tu n'as pas joué.",
+        "direction": "Cherche les captures forcées et les échecs disponibles dans la position.",
+    },
+    "Sortie de Dame précoce / Perte de tempo": {
+        "observe": "Le problème n'est pas tactique ici : regarde le développement de tes pièces.",
+        "direction": "Développe tes pièces mineures avant la Dame, pour ne pas perdre de temps.",
+    },
+    "Précipitation (zeitnot)": {
+        "observe": "Ce coup a été joué avec très peu de temps au compteur.",
+        "direction": "Même sous pression, vérifie au moins les captures et échecs immédiats avant de jouer.",
+    },
+    "Gaffe tactique majeure": {
+        "observe": "Il y a une perte de matériel ou d'évaluation importante ici — cherche ce qui a été manqué.",
+        "direction": "Passe en revue les coups candidats forcés : échecs, captures, menaces.",
+    },
+    "Erreur de calcul / Structure": {
+        "observe": "Regarde la structure de pions et les cases faibles autour du roi.",
+        "direction": "Le problème est probablement positionnel plutôt que tactique.",
+    },
+    "Imprécision positionnelle": {
+        "observe": "Rien de forcé ici — c'est un choix de plan qui pouvait être meilleur.",
+        "direction": "Compare l'activité de tes pièces avant et après le coup recommandé.",
+    },
+}
+DEFAULT_HINTS = {
+    "observe": "Regarde les pièces en présence, les cases faibles et les menaces immédiates.",
+    "direction": "Cherche un coup qui répond à la plus grande menace ou exploite la plus grande faiblesse.",
+}
+PUNISH_HINTS = {
+    "observe": "Ton adversaire vient de jouer un coup qui affaiblit sa position. Repère ce qu'il a laissé faible ou en prise.",
+    "direction": "Cherche le moyen le plus direct de profiter de cette erreur : gain de matériel, attaque, ou avantage décisif.",
+}
+
+PIECE_NAMES_FR = {chess.PAWN: "pion", chess.KNIGHT: "cavalier", chess.BISHOP: "fou",
+                   chess.ROOK: "tour", chess.QUEEN: "dame", chess.KING: "roi"}
+
+
+def hint_execute_text(board_for_hint, best_san):
+    """Indice niveau 3 : type de pièce et case de départ du meilleur coup,
+    sans révéler la destination — dérivé de la position réelle, pas d'un texte générique."""
+    if board_for_hint is None or not best_san:
+        return "Regarde les coups qui utilisent la pièce la plus active de cette position."
+    try:
+        mv = board_for_hint.parse_san(best_san)
+        piece = board_for_hint.piece_at(mv.from_square)
+        piece_name = PIECE_NAMES_FR.get(piece.piece_type, "pièce") if piece else "pièce"
+        from_sq = chess.square_name(mv.from_square)
+        return f"Le coup clé se joue avec ton {piece_name} en {from_sq}."
+    except Exception:
+        return "Regarde les coups qui utilisent la pièce la plus active de cette position."
+
+
 # ==========================================================
 # UI
 # ==========================================================
@@ -1465,6 +1661,7 @@ with st.sidebar:
         st.session_state.pop("games", None)
         st.session_state.pop("games_meta", None)
         st.session_state.pop("analyses_map", None)
+        st.session_state.pop("punish_map", None)
         st.rerun()
 
     st.divider()
@@ -1632,23 +1829,26 @@ with tabs[2]:
             cached = get_cached_analysis(username, game_id, depth) if (reuse_cache and game_id) else None
 
             if cached is not None:
-                res = cached
+                res, punish_res = cached
                 st.info("Analyse déjà disponible en base pour cette partie (profondeur suffisante) — réutilisée. "
                         "Décoche la case dans la barre latérale pour forcer une nouvelle analyse.")
             elif engine is None:
                 st.error("⚠️ Stockfish n'est pas disponible sur le serveur.")
-                res = None
+                res, punish_res = None, None
             else:
                 with st.spinner("Analyse approfondie en cours…"):
-                    res = analyze_game(games[selected], username, engine, depth=depth)
+                    res, punish_res = analyze_game(games[selected], username, engine, depth=depth)
                 if game_id:
-                    save_analysis(username, game_id, depth, res)
+                    save_analysis(username, game_id, depth, res, punish_res)
 
             if res is not None:
                 st.session_state.setdefault("analyses_map", {})[selected] = res
+                st.session_state.setdefault("punish_map", {})[selected] = punish_res or []
 
         analyses_map = st.session_state.get("analyses_map", {})
+        punish_map = st.session_state.get("punish_map", {})
         recs = analyses_map.get(selected)
+        punish_recs = punish_map.get(selected)
 
         if recs is not None:
             if len(recs) == 0:
@@ -1664,6 +1864,10 @@ with tabs[2]:
                 m1.metric("Note du Coach", f"{note}/10")
                 m2.metric("Perte moyenne (ACPL)", f"{acpl} cp")
                 m3.metric("Coups joués sous 60s", zeitnot_moves)
+
+                if punish_recs:
+                    n_punished = sum(1 for p in punish_recs if p.get("punished"))
+                    st.metric("🎯 Punitions de gaffes adverses réussies", f"{n_punished}/{len(punish_recs)}")
 
                 erreurs_notables = [r for r in recs if r["category"] != "OK"]
                 severe = sorted(erreurs_notables, key=lambda x: x["drop"], reverse=True)[:3]
@@ -1912,10 +2116,11 @@ with tabs[5]:
 
     st.divider()
 
-    st.markdown("### 🧩 Puzzles personnels (révision espacée)")
+    st.markdown("### 🧩 Puzzles personnels (révision espacée, indices progressifs)")
     st.caption(
         "Méthode Leitner : un coup que tu retrouves revient de moins en moins souvent (jusqu'à tous les 30 jours), "
-        "un coup raté revient vite (le lendemain). Basé sur l'ensemble de ton historique enregistré."
+        "un coup raté revient vite (le lendemain). 4 niveaux d'indices pour t'aider à trouver par toi-même "
+        "plutôt que de révéler la solution d'un coup."
     )
 
     due_puzzles, all_puzzles_enriched = load_due_puzzles(username)
@@ -1935,35 +2140,52 @@ with tabs[5]:
             st.write(f"**{len(due_puzzles)} puzzle(s) à réviser aujourd'hui** (sur {len(all_puzzles_enriched)} au total).")
             puzzle_data = due_puzzles[0]
             puzzle_key = f"{puzzle_data['game_id']}_{puzzle_data['ply']}"
+            hint_key = f"hint_level_{puzzle_key}"
+            level = st.session_state.get(hint_key, 0)
 
             pgn_text, user_color_str = load_game_pgn_and_color(username, puzzle_data["game_id"])
             board_before, _ = board_before_ply(pgn_text, puzzle_data["ply"]) if pgn_text else (None, None)
+            theme = puzzle_data.get("theme", puzzle_data["category"])
+            theme_hints = THEME_HINTS.get(theme, DEFAULT_HINTS)
 
             st.markdown(f"**{puzzle_data['date']} — {puzzle_data['white']} vs {puzzle_data['black']} — "
                         f"Coup {puzzle_data['move_no']}** · Boîte {puzzle_data['box']} · "
                         f"{puzzle_data['review_count']} révision(s) précédente(s)")
-            st.caption(f"Thème : {puzzle_data.get('theme', puzzle_data['category'])} — "
-                       f"tu avais joué {puzzle_data['san']} (perte de {puzzle_data['drop'] / 100:.2f} pions)")
 
             if board_before is not None:
                 render_puzzle_board(board_before, user_color_str)
             else:
                 st.warning("Position introuvable (la partie n'est peut-être plus dans l'historique).")
 
-            with st.expander("💡 Révéler la solution", expanded=False):
-                st.success(f"Le meilleur coup était : **{puzzle_data['best']}**")
+            hint_labels = ["👀 Indice 1 : Observe", "🧭 Indice 2 : Direction",
+                           "🎯 Indice 3 : Exécute", "💡 Voir la solution complète"]
+            if level < 4:
+                if st.button(hint_labels[level], key=f"hintbtn_{puzzle_key}_{level}", use_container_width=True):
+                    st.session_state[hint_key] = level + 1
+                    st.rerun()
+
+            if level >= 1:
+                st.info(f"👀 **Observe** — {theme_hints['observe']}")
+            if level >= 2:
+                st.info(f"🧭 **Direction** — {theme_hints['direction']}")
+            if level >= 3:
+                st.info(f"🎯 **Exécute** — {hint_execute_text(board_before, puzzle_data['best'])}")
+            if level >= 4:
+                st.success(f"💡 **Solution** — Le meilleur coup était : **{puzzle_data['best']}**")
                 if board_before is not None:
                     render_puzzle_board(board_before, user_color_str, best_san=puzzle_data["best"])
-                st.write(f"Ton coup : {puzzle_data['san']} (Éval après : {puzzle_data['eval_after']}) — "
-                         f"Coup recommandé : {puzzle_data['best']} (Éval avant : {puzzle_data['eval_before']})")
+                st.warning(f"⚠️ **Piège à éviter** — tu avais joué {puzzle_data['san']} "
+                           f"(perte de {puzzle_data['drop'] / 100:.2f} pions par rapport au meilleur coup).")
 
-                st.markdown("**As-tu retrouvé ce coup avant de regarder ?**")
+                st.markdown("**As-tu retrouvé ce coup avant d'arriver à la solution complète ?**")
                 b1, b2 = st.columns(2)
                 if b1.button("✅ Oui, trouvé", key=f"correct_{puzzle_key}", use_container_width=True):
                     record_review(username, puzzle_data["game_id"], puzzle_data["ply"], correct=True)
+                    st.session_state.pop(hint_key, None)
                     st.rerun()
                 if b2.button("❌ Non, pas trouvé", key=f"wrong_{puzzle_key}", use_container_width=True):
                     record_review(username, puzzle_data["game_id"], puzzle_data["ply"], correct=False)
+                    st.session_state.pop(hint_key, None)
                     st.rerun()
 
         with st.expander("📚 Parcourir tous tes puzzles enregistrés"):
@@ -1983,6 +2205,81 @@ with tabs[5]:
             if board_before2 is not None:
                 render_puzzle_board(board_before2, user_color_str2)
             st.write(f"Coup joué : **{browse_data['san']}** — Meilleur coup : **{browse_data['best']}**")
+
+    st.divider()
+
+    st.markdown("### 🎯 Punir la gaffe adverse")
+    st.caption(
+        "Moments où ton adversaire a commis une erreur et où tu n'as pas trouvé (ou pas clairement trouvé) "
+        "la meilleure punition. Même méthode : révision espacée + indices progressifs."
+    )
+
+    due_punish, all_punish_enriched = load_due_punish_puzzles(username)
+
+    if not all_punish_enriched:
+        st.info("Ces puzzles apparaîtront automatiquement dès qu'une partie analysée contiendra une gaffe adverse "
+                "que tu n'as pas parfaitement punie.")
+    else:
+        punish_box_counts = Counter(p["box"] for p in all_punish_enriched)
+        pbox_cols = st.columns(5)
+        for i in range(1, 6):
+            pbox_cols[i - 1].metric(f"Boîte {i}", punish_box_counts.get(i, 0))
+
+        if not due_punish:
+            st.success(f"🎉 Aucune punition à réviser aujourd'hui parmi les {len(all_punish_enriched)} enregistrées.")
+        else:
+            st.write(f"**{len(due_punish)} punition(s) à réviser aujourd'hui** (sur {len(all_punish_enriched)} au total).")
+            p_data = due_punish[0]
+            p_key = f"punish_{p_data['game_id']}_{p_data['ply']}"
+            p_hint_key = f"hint_level_{p_key}"
+            p_level = st.session_state.get(p_hint_key, 0)
+
+            pgn_text3, user_color_str3 = load_game_pgn_and_color(username, p_data["game_id"])
+            # Position juste APRÈS la gaffe adverse (ply+1) : c'est celle que l'utilisateur doit résoudre.
+            board_after_blunder, _ = board_before_ply(pgn_text3, p_data["ply"] + 1) if pgn_text3 else (None, None)
+
+            st.markdown(f"**{p_data['date']} — {p_data['white']} vs {p_data['black']} — "
+                        f"Coup {p_data['move_no']}** · Boîte {p_data['box']} · "
+                        f"{p_data['review_count']} révision(s) précédente(s)")
+            st.caption(f"L'adversaire vient de jouer {p_data['opponent_san']} "
+                       f"(perte de {p_data['opponent_drop'] / 100:.2f} pions pour lui). À toi de jouer.")
+
+            if board_after_blunder is not None:
+                render_puzzle_board(board_after_blunder, user_color_str3)
+            else:
+                st.warning("Position introuvable (la partie n'est peut-être plus dans l'historique).")
+
+            p_hint_labels = ["👀 Indice 1 : Observe", "🧭 Indice 2 : Direction",
+                             "🎯 Indice 3 : Exécute", "💡 Voir la solution complète"]
+            if p_level < 4:
+                if st.button(p_hint_labels[p_level], key=f"phintbtn_{p_key}_{p_level}", use_container_width=True):
+                    st.session_state[p_hint_key] = p_level + 1
+                    st.rerun()
+
+            if p_level >= 1:
+                st.info(f"👀 **Observe** — {PUNISH_HINTS['observe']}")
+            if p_level >= 2:
+                st.info(f"🧭 **Direction** — {PUNISH_HINTS['direction']}")
+            if p_level >= 3:
+                st.info(f"🎯 **Exécute** — {hint_execute_text(board_after_blunder, p_data.get('best_response_san'))}")
+            if p_level >= 4:
+                best_resp = p_data.get("best_response_san") or "non déterminé"
+                st.success(f"💡 **Solution** — La meilleure punition était : **{best_resp}**")
+                if board_after_blunder is not None and p_data.get("best_response_san"):
+                    render_puzzle_board(board_after_blunder, user_color_str3, best_san=p_data["best_response_san"])
+                st.warning(f"⚠️ **Ce que tu avais joué** — {p_data['user_response_san']} "
+                           f"(perte de {p_data['user_drop'] / 100:.2f} pions par rapport à la meilleure punition).")
+
+                st.markdown("**As-tu trouvé cette punition avant d'arriver à la solution complète ?**")
+                pb1, pb2 = st.columns(2)
+                if pb1.button("✅ Oui, trouvé", key=f"pcorrect_{p_key}", use_container_width=True):
+                    record_review(username, p_data["game_id"], p_data["ply"], correct=True)
+                    st.session_state.pop(p_hint_key, None)
+                    st.rerun()
+                if pb2.button("❌ Non, pas trouvé", key=f"pwrong_{p_key}", use_container_width=True):
+                    record_review(username, p_data["game_id"], p_data["ply"], correct=False)
+                    st.session_state.pop(p_hint_key, None)
+                    st.rerun()
 
     st.divider()
 
